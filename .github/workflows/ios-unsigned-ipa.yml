@@ -75,10 +75,17 @@ jobs:
             "$APP_PATH/Info.plist")"
           BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' \
             "$APP_PATH/Info.plist")"
-          test -n "$EXECUTABLE_NAME"
-          test -x "$APP_PATH/$EXECUTABLE_NAME"
-          test "$BUNDLE_ID" = 'com.lofilogic.ios'
-          test -f "$APP_PATH/presets.json"
+          test -n "$EXECUTABLE_NAME" || { echo "Bundle executable name is empty." >&2; exit 1; }
+          test -x "$APP_PATH/$EXECUTABLE_NAME" || { echo "Bundle executable is missing." >&2; exit 1; }
+          test "$BUNDLE_ID" = 'com.lofilogic.ios' || {
+            echo "Unexpected bundle ID: $BUNDLE_ID" >&2
+            exit 1
+          }
+          test -f "$APP_PATH/presets.json" || {
+            echo "Preset catalog is missing from the app bundle." >&2
+            find "$APP_PATH" -type f -print
+            exit 1
+          }
 
           IOS_LUT_COUNT="$(find "$APP_PATH" -type f -name 'ios_*.cube' | wc -l | tr -d ' ')"
           if [ "$IOS_LUT_COUNT" -lt 21 ]; then

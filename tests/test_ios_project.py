@@ -24,6 +24,7 @@ def test_ios_bundle_declares_shared_catalog_and_luts():
     project = (IOS / "project.yml").read_text(encoding="utf-8")
     assert "../../shared/presets.json" in project
     assert "../../assets/luts" in project
+    assert project.count("buildPhase: resources") == 2
     catalog = json.loads((ROOT / "shared" / "presets.json").read_text(encoding="utf-8"))
     missing = [preset["lut"] for preset in catalog["presets"]
                if not (ROOT / "assets" / "luts" / preset["lut"]).is_file()]

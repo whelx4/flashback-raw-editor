@@ -12,9 +12,10 @@ targets:
       - Models
       - Services
       - Views
-    resources:
       - path: ../../shared/presets.json
+        buildPhase: resources
       - path: ../../assets/luts
+        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.lofilogic.ios
