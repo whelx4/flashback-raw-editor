@@ -1,0 +1,38 @@
+import Foundation
+
+struct RollFrame: Identifiable, Codable, Hashable {
+    let id: UUID
+    let filename: String
+    var presetID: String
+    var intensity: Double
+    var isOne35V2: Bool?
+    var developedFilename: String?
+
+    init(filename: String, presetID: String = "funsaver_800", intensity: Double = 1,
+         isOne35V2: Bool = false, developedFilename: String? = nil) {
+        self.id = UUID()
+        self.filename = filename
+        self.presetID = presetID
+        self.intensity = intensity
+        self.isOne35V2 = isOne35V2
+        self.developedFilename = developedFilename
+    }
+
+    var isDeveloped: Bool { developedFilename != nil }
+}
+
+struct FilmRoll: Identifiable, Codable, Hashable {
+    let id: UUID
+    var name: String
+    let importedAt: Date
+    var frames: [RollFrame]
+
+    init(name: String, frames: [RollFrame]) {
+        self.id = UUID()
+        self.name = name
+        self.importedAt = Date()
+        self.frames = frames
+    }
+
+    var developedCount: Int { frames.filter(\.isDeveloped).count }
+}

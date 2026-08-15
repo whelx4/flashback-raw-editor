@@ -208,6 +208,7 @@ numpy/cv2 reference implementation.
 
 - **[Architecture](docs/ARCHITECTURE.md)** — the colour pipeline, GPU-resident design, V1/V2 support, and why film-like low acuity is the point.
 - **[Development](docs/DEVELOPMENT.md)** — build from source, run, test, and package.
+- **[Free iPhone installation from Windows](docs/INSTALL_IPHONE_FREE_WINDOWS.md)** — build an unsigned IPA on GitHub Actions and sideload it with AltStore Classic.
 
 ---
 
