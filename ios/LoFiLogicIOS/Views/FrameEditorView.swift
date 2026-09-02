@@ -10,6 +10,7 @@ struct FrameEditorView: View {
     @State private var rendering = false
     @State private var developing = false
     @State private var developedURL: URL?
+    @State private var savedToPhotos = false
     @State private var exportError: String?
     @GestureState private var comparing = false
 
@@ -73,8 +74,8 @@ struct FrameEditorView: View {
                         Button {
                             Task { await develop(roll: roll, frame: frame) }
                         } label: {
-                            Label(developing ? "Developing…" : "Develop JPEG",
-                                  systemImage: "wand.and.stars")
+                            Label(developing ? "Saving…" : "Save to Photos",
+                                  systemImage: "square.and.arrow.down")
                         }
                         .buttonStyle(.borderedProminent).tint(.orange)
                         .disabled(developing)
@@ -83,6 +84,10 @@ struct FrameEditorView: View {
                             ShareLink(item: developedURL) {
                                 Label("Share", systemImage: "square.and.arrow.up")
                             }.buttonStyle(.bordered)
+                        }
+                        if savedToPhotos {
+                            Label("Saved", systemImage: "checkmark.circle.fill")
+                                .font(.caption).foregroundStyle(.green)
                         }
                     }.padding(.horizontal)
                 }
@@ -93,7 +98,7 @@ struct FrameEditorView: View {
         }
         .background(Color.black.ignoresSafeArea())
         .navigationBarTitleDisplayMode(.inline)
-        .alert("Development failed", isPresented: Binding(
+        .alert("Export failed", isPresented: Binding(
             get: { exportError != nil }, set: { if !$0 { exportError = nil } }
         )) { Button("OK", role: .cancel) {} } message: { Text(exportError ?? "Unknown error") }
     }
@@ -110,9 +115,9 @@ struct FrameEditorView: View {
         rendering = true
         let url = store.frameURL(rollID: roll.id, frame: frame)
         let renderTask = Task.detached {
-            let edited = try One35Processor.shared.render(
+            let edited = try ImageProcessor.shared.render(
                 url: url, preset: preset, intensity: frame.intensity)
-            let neutral = try One35Processor.shared.render(
+            let neutral = try ImageProcessor.shared.render(
                 url: url, preset: preset, intensity: 0)
             return (edited, neutral)
         }
@@ -131,15 +136,17 @@ struct FrameEditorView: View {
         do {
             let source = store.frameURL(rollID: roll.id, frame: frame)
             let image = try await Task.detached {
-                try One35Processor.shared.render(
+                try ImageProcessor.shared.render(
                     url: source, preset: preset, intensity: frame.intensity,
                     maxDimension: 6000)
             }.value
-            guard let data = image.jpegData(compressionQuality: 0.95) else {
-                throw One35Processor.RenderError.cannotRender
-            }
-            developedURL = try store.saveDevelopedJPEG(
+            let data = try ImageProcessor.shared.jpegData(
+                for: image, preservingMetadataFrom: source, quality: 0.95)
+            let url = try store.saveDevelopedJPEG(
                 data, rollID: roll.id, frameID: frame.id, suffix: preset.exportSuffix)
+            developedURL = url
+            try await store.saveToPhotoLibrary(url)
+            savedToPhotos = true
         } catch {
             exportError = error.localizedDescription
         }

@@ -35,6 +35,7 @@ a = Analysis(
     datas=[
         ('assets', 'assets'),
         ('core/shaders', 'core/shaders'),
+        ('shared', 'shared'),
     ],
     hiddenimports=[
         # App packages
@@ -43,6 +44,8 @@ a = Analysis(
         'core.kernels',
         'core.effects',
         'core.processor',
+        'core.preset_catalog',
+        'core.input_formats',
         'core.gpu',
         'ui',
         'ui.widgets',
@@ -54,8 +57,6 @@ a = Analysis(
         'rawpy',
         'colour',
         'colour.models',
-        'colour.models.rgb_to_rgb',
-        'colour.RGB_COLOURSPACES',
 
         # GPU via wgpu
         'wgpu',

@@ -1,0 +1,120 @@
+{
+  "schemaVersion": 1,
+  "retrieved": "2026-08-15",
+  "method": "tools/analyze_preset_references.py",
+  "sources": {
+    "funsaver_steel": {
+      "url": "https://thedarkroom.com/app/uploads/2020/01/Kodak-singleuse-camera-sample-images-000150640002-1200x796.jpg",
+      "sha256": "0882d7352fe39ad92d11e504debee09ae09f6023c313382f06a6f302f4724ce4",
+      "bytes": 145414,
+      "width": 1200,
+      "height": 796
+    },
+    "funsaver_bridge": {
+      "url": "https://thedarkroom.com/app/uploads/2020/01/Kodak-singleuse-camera-sample-images-00150640003-1200x796.jpg",
+      "sha256": "e598a338470163e57b7402a623fc95de58c03e239d4458890ea53c3833f02700",
+      "bytes": 163228,
+      "width": 1200,
+      "height": 796
+    },
+    "quicksnap_steel": {
+      "url": "https://thedarkroom.com/app/uploads/2020/01/fuji-single-use-sample-image-000150620002-1200x796.jpg",
+      "sha256": "f55116929bcb9d9b2ed4d85e425a38b13f9d15f477588e1944696dbbfe77bb04",
+      "bytes": 142173,
+      "width": 1200,
+      "height": 796
+    },
+    "quicksnap_bridge": {
+      "url": "https://thedarkroom.com/app/uploads/2020/01/fuji-single-use-sample-image-000150620003-1200x796.jpg",
+      "sha256": "061e13a7e4dde982794e28c877f6cef1def42ad9da9fd952c0eca498aeb1b8ea",
+      "bytes": 146502,
+      "width": 1200,
+      "height": 796
+    },
+    "paper_original": {
+      "url": "https://amateurphotographer.com/wp-content/uploads/sites/7/2025/03/Colour-papershootPST00286.jpg?w=768",
+      "sha256": "6a98255ffaeadd59cc2b35c45ef29780c17113d6bb6dba4478281311ff5fc34f",
+      "bytes": 192469,
+      "width": 768,
+      "height": 1024
+    },
+    "paper_bw": {
+      "url": "https://amateurphotographer.com/wp-content/uploads/sites/7/2025/03/blackandwhite-papershootPST00288.jpg?w=768",
+      "sha256": "3454c2b5926ae4c392b7baad0cda85e9fb7905d737062855b36920ff3f384a34",
+      "bytes": 187624,
+      "width": 768,
+      "height": 1024
+    },
+    "paper_blue": {
+      "url": "https://amateurphotographer.com/wp-content/uploads/sites/7/2025/03/Blues-papershootPST00290.jpg?w=768",
+      "sha256": "f3507feb637d122b26229e3539622259960ebc093c2c5bfbbf57735da96fa73e",
+      "bytes": 197856,
+      "width": 768,
+      "height": 1024
+    },
+    "paper_sepia": {
+      "url": "https://amateurphotographer.com/wp-content/uploads/sites/7/2025/03/sepia-papershootPST00289.jpg?w=768",
+      "sha256": "a9988ca1419ed642a2386b1de58df0ff33a8383d6bea665bc6ce1c87f154f42f",
+      "bytes": 197106,
+      "width": 768,
+      "height": 1024
+    }
+  },
+  "pairs": {
+    "quicksnap_minus_funsaver_steel": {
+      "alignmentInliers": 769,
+      "samplePixels": 705667,
+      "medianDeltaLab": [
+        2.7039,
+        2.8438,
+        -1.1719
+      ],
+      "medianChromaRatio": 0.967,
+      "caveat": "Measurements are of compressed web derivatives after robust affine alignment; directional only."
+    },
+    "quicksnap_minus_funsaver_bridge": {
+      "alignmentInliers": 503,
+      "samplePixels": 400979,
+      "medianDeltaLab": [
+        2.4658,
+        6.0625,
+        0.5312
+      ],
+      "medianChromaRatio": 1.1034,
+      "caveat": "Measurements are of compressed web derivatives after robust affine alignment; directional only."
+    },
+    "paper_bw_minus_original": {
+      "alignmentInliers": 564,
+      "samplePixels": 318783,
+      "medianDeltaLab": [
+        -3.7598,
+        2.8438,
+        5.0
+      ],
+      "medianChromaRatio": 0.685,
+      "caveat": "Measurements are of compressed web derivatives after robust affine alignment; directional only."
+    },
+    "paper_blue_minus_original": {
+      "alignmentInliers": 571,
+      "samplePixels": 311715,
+      "medianDeltaLab": [
+        -2.7527,
+        4.6875,
+        -4.8438
+      ],
+      "medianChromaRatio": 1.3181,
+      "caveat": "Measurements are of compressed web derivatives after robust affine alignment; directional only."
+    },
+    "paper_sepia_minus_original": {
+      "alignmentInliers": 425,
+      "samplePixels": 319861,
+      "medianDeltaLab": [
+        -2.3376,
+        3.6406,
+        9.375
+      ],
+      "medianChromaRatio": 1.8812,
+      "caveat": "Measurements are of compressed web derivatives after robust affine alignment; directional only."
+    }
+  }
+}

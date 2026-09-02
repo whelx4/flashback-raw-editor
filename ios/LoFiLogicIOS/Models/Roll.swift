@@ -5,16 +5,16 @@ struct RollFrame: Identifiable, Codable, Hashable {
     let filename: String
     var presetID: String
     var intensity: Double
-    var isOne35V2: Bool?
+    var sourceCamera: String?
     var developedFilename: String?
 
-    init(filename: String, presetID: String = "funsaver_800", intensity: Double = 1,
-         isOne35V2: Bool = false, developedFilename: String? = nil) {
+    init(filename: String, presetID: String = "funsaver_800", intensity: Double = 0.6,
+         sourceCamera: String? = nil, developedFilename: String? = nil) {
         self.id = UUID()
         self.filename = filename
         self.presetID = presetID
         self.intensity = intensity
-        self.isOne35V2 = isOne35V2
+        self.sourceCamera = sourceCamera
         self.developedFilename = developedFilename
     }
 

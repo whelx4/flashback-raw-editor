@@ -1,5 +1,5 @@
 """
-Flashback One35 raw processor — DNG-spec color pipeline.
+LoFi Logic image processor — compact-camera JPEG and RAW colour pipeline.
 
 Pipeline (Flashback DNG):
     rawpy.postprocess(user_wb=[1,1,1,1], user_black=SENSOR_BLACK,
@@ -10,7 +10,7 @@ Pipeline (Flashback DNG):
     XYZ_D50 = FM1 @ raw_wb
     ACEScg = XYZ_D50_TO_ACESCG @ XYZ_D50          <- cached intermediate
     user WB + tint + exposure + push/pull (linear ACEScg)
-    bloom / vignette (linear ACEScg)
+    halation / vignette / bloom (linear ACEScg)
     CNR in Lab space
     ACEScct encode -> LUT -> post-LUT effects -> display sRGB
 
@@ -22,6 +22,7 @@ Pipeline (generic raw — non-Flashback):
     same render pipeline from here (LUT, sliders, grain, etc.)
 """
 import logging
+import io
 import os
 import struct
 import time
@@ -32,12 +33,25 @@ import rawpy
 import cv2
 import exifread
 import colour
+from PIL import Image, ImageCms, ImageOps
 
 from . import resource_path
+from .input_formats import is_raster_path, is_supported_path
 
 log = logging.getLogger(__name__)
+
+INPUT_FLASHBACK_RAW = 'flashback_raw'
+INPUT_GENERIC_RAW = 'generic_raw'
+INPUT_RASTER = 'raster'
+
+
+def input_kind_for_path(path, is_flashback=False):
+    if is_raster_path(path):
+        return INPUT_RASTER
+    return INPUT_FLASHBACK_RAW if is_flashback else INPUT_GENERIC_RAW
 from .config import (
     SENSOR_BLACK, GRAIN_TILE_SCALE, GRAIN_HIGHLIGHT_BIAS, PUSH_PULL_RANGE_EV,
+    BASE_EXPOSURE_OFFSET_V2,
     GENERIC_RAW_ANCHOR_EV,
     BASE_KELVIN, GENERIC_DAYLIGHT_K, GENERIC_DAYLIGHT_WB_FALLBACK,
     PROFILE_TONE_CURVE,
@@ -51,7 +65,6 @@ from .config import (
 from .kernels import (acescct_encode, apply_grain, encode_then_lut, run_resident,
                       color_transform)
 from .gpu import gpu
-from .v1_negative import is_v1_negative, develop_v1
 from .auto_exposure_reverse import compute_reverse_gain
 from .effects import (
     apply_lut_fast,
@@ -62,6 +75,8 @@ from .effects import (
     apply_sharpen,
     apply_vignette,
     apply_bloom,
+    apply_digital_noise,
+    apply_jpeg_artifacts,
     reduce_color_noise_chroma,
 )
 
@@ -476,8 +491,8 @@ def _read_generic_raw_boost_ev(path: str) -> float:
 # PROCESSOR
 # =============================================================================
 
-class FlashbackProcessor:
-    """Raw processor for Flashback DNGs and generic camera raws.
+class ImageProcessor:
+    """Image processor for finished compact-camera files and camera RAWs.
 
     Owns:
       * vibe         — the active VibeConfig (film-stock settings)
@@ -495,8 +510,13 @@ class FlashbackProcessor:
         self.intermediate_acescg = None
         self.current_file = None
         self.is_flashback_file = False
+        self.input_kind = INPUT_GENERIC_RAW
         self._rev_gain = 1.0
         self._rev_gain_unconditional = 1.0
+        # Neutral display renders are independent of preset intensity.  Cache
+        # one full and one scrub-size copy so moving the single intensity
+        # control does not repeatedly rebuild the baseline image.
+        self._neutral_cache = {}
         self.highlight_mode = 1
         self.rawpy_bright = 1.0
         self.enable_highlight_recovery = True
@@ -536,15 +556,20 @@ class FlashbackProcessor:
             except Exception:
                 pass
 
-    def _generate_grain_layer(self, height, width, sigma):
+    def _generate_grain_layer(self, height, width, sigma, scale=1.0):
         if not self.grain_tiles:
             grain = np.full((height, width, 3), 0.5, dtype=np.float32)
             return np.clip(grain + np.random.normal(0, sigma, (height, width, 3)).astype(np.float32), 0, 1)
         out = np.zeros((height, width, 3), dtype=np.float32)
-        th, tw = self.grain_tiles[0].shape[:2]
+        scale = max(float(scale), 0.1)
+        th0, tw0 = self.grain_tiles[0].shape[:2]
+        th, tw = max(1, int(round(th0 * scale))), max(1, int(round(tw0 * scale)))
         for y in range(0, height, th):
             for x in range(0, width, tw):
                 tile = self.grain_tiles[np.random.randint(0, len(self.grain_tiles))].copy()
+                if tile.shape[:2] != (th, tw):
+                    tile = cv2.resize(tile, (tw, th), interpolation=(
+                        cv2.INTER_LINEAR if scale > 1.0 else cv2.INTER_AREA))
                 if np.random.random() > 0.5:
                     tile = np.flip(tile, axis=1)
                 if np.random.random() > 0.5:
@@ -576,17 +601,24 @@ class FlashbackProcessor:
         return out
 
     def _resident_pre_lut_stages(self, v, lut_path):
-        """Build the pre-LUT resident stages (vignette -> bloom -> CNR) plus
+        """Build pre-LUT stages (halation -> vignette -> bloom -> CNR) plus
         matching CPU fallback ops, in render order. Vignette precedes bloom so
         glow is generated from the vignetted image; CNR is gated to the LUT path
         (legacy behaviour). Returns (stages, cpu_ops) where cpu_ops[i] is an
         img->img callable mirroring stages[i] for the no-GPU fallback.
         """
         stages, cpu_ops = [], []
+        if v.enable_halation and v.halation_strength_pct > 0:
+            ha = (stops_above_mid_grey_to_acescct(v.halation_threshold_stops),
+                  v.halation_blur_radius, pct(v.halation_strength_pct),
+                  v.halation_warmth_pct)
+            stages.append(lambda fr, a=ha: gpu.halation_frame(fr, *a))
+            cpu_ops.append(lambda im, a=ha: apply_halation(im, *a))
         if v.enable_vignette and v.vignette_strength_pct > 0:
             va = (pct(v.vignette_strength_pct),
                   vignette_color_pct_to_shift(v.vignette_color_pct),
-                  vignette_curve_to_power(v.vignette_curve))
+                  vignette_curve_to_power(v.vignette_curve),
+                  (v.vignette_tint_r, v.vignette_tint_g, v.vignette_tint_b))
             stages.append(lambda fr, a=va: gpu.vignette_frame(fr, *a))
             cpu_ops.append(lambda im, a=va: apply_vignette(im, *a))
         if v.enable_bloom and v.bloom_strength_pct > 0:
@@ -628,11 +660,16 @@ class FlashbackProcessor:
         if v.enable_grain and v.grain_strength_pct > 0:
             h, w = shape[:2]
             g_strength = pct(v.grain_strength_pct)
-            grain_layer = self._generate_grain_layer(h, w, sigma=g_strength)
+            grain_layer = self._generate_grain_layer(
+                h, w, sigma=g_strength, scale=v.grain_scale)
             g_bias = self._grain_highlight_bias(grain_driver)
             stages.append(lambda fr, g=grain_layer, i=g_strength, b=g_bias:
                           gpu.grain_frame(fr, g, i, highlight_bias=b))
-        if v.enable_sharpen and v.sharpen_strength_pct > 0:
+        # Digital texture and JPEG simulation are CPU stages. Keep sharpening
+        # out of the resident chain when either is active so the documented
+        # order remains noise -> JPEG -> final sharpening.
+        digital_tail = v.enable_digital_noise or v.enable_jpeg_artifacts
+        if not digital_tail and v.enable_sharpen and v.sharpen_strength_pct > 0:
             sh_strength = pct(v.sharpen_strength_pct)
             sh_radius = v.sharpen_radius
             stages.append(lambda fr, s=sh_strength, r=sh_radius: gpu.sharpen_frame(fr, s, r))
@@ -711,6 +748,37 @@ class FlashbackProcessor:
                       f"range=[{acescg.min():.4f},{acescg.max():.4f}]")
         return acescg
 
+    def _develop_raster(self, path: str) -> np.ndarray:
+        """Decode a finished image, honour its ICC profile, and enter ACEScg.
+
+        Files without an embedded profile are interpreted as sRGB, matching the
+        web/camera convention for JPEG and PNG. Pillow applies EXIF orientation
+        before pixels are cached, so rotation starts from what users expect.
+        """
+        t0 = time.time()
+        with Image.open(path) as source:
+            source = ImageOps.exif_transpose(source)
+            icc = source.info.get('icc_profile')
+            if icc:
+                try:
+                    source_profile = ImageCms.ImageCmsProfile(io.BytesIO(icc))
+                    srgb_profile = ImageCms.createProfile('sRGB')
+                    source = ImageCms.profileToProfile(
+                        source, source_profile, srgb_profile, outputMode='RGB')
+                except Exception:
+                    log.warning("[processor] Could not apply embedded ICC profile: %s", path,
+                                exc_info=True)
+                    source = source.convert('RGB')
+            else:
+                source = source.convert('RGB')
+            srgb = np.asarray(source, dtype=np.float32) / 255.0
+
+        linear_srgb = _srgb_eotf(srgb)
+        acescg = color_transform(linear_srgb, LINSRGB_TO_ACESCG)
+        _timing_print(f"  raster->ACEScg: {(time.time()-t0)*1000:6.2f} ms  "
+                      f"shape={acescg.shape}")
+        return acescg
+
     # ---- public surface -------------------------------------------------------
 
     def get_settings(self) -> dict:
@@ -748,17 +816,6 @@ class FlashbackProcessor:
 
     # ---- pipeline -------------------------------------------------------------
 
-    def _bake_halation(self, acescg):
-        if not (self.vibe.enable_halation and self.vibe.halation_strength_pct > 0):
-            return acescg
-        return apply_halation(
-            acescg,
-            stops_above_mid_grey_to_acescct(self.vibe.halation_threshold_stops),
-            self.vibe.halation_blur_radius,
-            pct(self.vibe.halation_strength_pct),
-            self.vibe.halation_warmth_pct,
-        )
-
     def load_image(self, dng_path):
         total_start = time.time()
         _timing_print(f"\n{'='*60}")
@@ -767,27 +824,19 @@ class FlashbackProcessor:
 
         self.current_file = dng_path
 
-        if os.path.splitext(dng_path)[1].lower() in ('.tif', '.tiff'):
-            log.warning("[processor] TIFF import is not supported. Open the original DNG instead.")
+        if not is_supported_path(dng_path):
+            log.warning("[processor] Unsupported input format: %s", dng_path)
             return None
 
-        # V1 negatives are headerless raw + sidecar JSON, not DNGs — detect
-        # them first and skip the (harmless but pointless) DNG EXIF probe.
-        is_v1 = is_v1_negative(dng_path)
-        if is_v1:
-            is_flashback, exp_s = False, None
-        else:
-            is_flashback, exp_s = _read_dng_exif(dng_path)
+        ext = os.path.splitext(dng_path)[1].lower()
+        is_flashback, exp_s = (_read_dng_exif(dng_path) if ext == '.dng'
+                               else (False, None))
         self.is_flashback_file = is_flashback
+        self.input_kind = input_kind_for_path(dng_path, is_flashback)
 
         try:
-            if is_v1:
-                # Develop the V1 negative to the same ACEScg intermediate the
-                # DNG path emits, then bake halation so it gets the full film
-                # look. AE already metered each frame to mid-grey, so exposure
-                # rides the generic path's neutral reverse-AE gain.
-                acescg = develop_v1(dng_path)
-                acescg = self._bake_halation(acescg)
+            if is_raster_path(dng_path):
+                acescg = self._develop_raster(dng_path)
                 self._rev_gain = 1.0
                 self._rev_gain_unconditional = 1.0
             elif is_flashback:
@@ -821,19 +870,15 @@ class FlashbackProcessor:
                 _timing_print(f"  raw->ACEScg: {(time.time()-t0)*1000:6.2f} ms  "
                               f"range=[{acescg.min():.4f},{acescg.max():.4f}]")
 
-                # exp_s already read from the single EXIF pass above
                 self._rev_gain = (float(compute_reverse_gain(exp_s, self.vibe.reverse_autoexposure_t_ref))
                                   if (exp_s and self.vibe.enable_reverse_autoexposure) else 1.0)
                 self._rev_gain_unconditional = float(compute_reverse_gain(exp_s, self.vibe.reverse_autoexposure_t_ref)) if exp_s else 1.0
-
-                acescg = self._bake_halation(acescg)
             else:
                 acescg = self._develop_generic_raw(dng_path)
-                acescg = self._bake_halation(acescg)
                 self._rev_gain = 1.0
                 self._rev_gain_unconditional = 1.0
-
             self.intermediate_acescg = np.ascontiguousarray(acescg, dtype=np.float32)
+            self._neutral_cache.clear()
 
             # Always return a fast downscaled preview so the UI is responsive
             # immediately. The caller is responsible for queuing a full-quality
@@ -859,6 +904,50 @@ class FlashbackProcessor:
     def render_export(self):
         return self._render(downscale=False)
 
+    @staticmethod
+    def _render_neutral_scene(img: np.ndarray, tone_curve: bool = True) -> np.ndarray:
+        """Render calibrated ACEScg without a creative LUT or film effects."""
+        flat = img.reshape(-1, 3)
+        prophoto = (flat @ ACESCG_TO_PROPHOTO).reshape(img.shape)
+        if tone_curve:
+            prophoto = _apply_tone_curve(np.clip(prophoto, 0.0, 1.0))
+        lin_srgb = (prophoto.reshape(-1, 3) @ PROPHOTO_TO_LINSRGB).reshape(prophoto.shape)
+        return _srgb_oetf(np.clip(lin_srgb, 0.0, 1.0))
+
+    def _neutral_display(self, img: np.ndarray, downscale: bool) -> np.ndarray:
+        """Render/cache the calibrated image before creative preset styling."""
+        a = self.adjustments
+        neutral_key = (
+            id(self.intermediate_acescg), bool(downscale),
+            self.input_kind,
+            round(float(a.exposure_ev), 4), round(float(a.wb_temp), 3),
+            round(float(a.tint), 3), img.shape[:2],
+        )
+        neutral_display = self._neutral_cache.get(neutral_key)
+        if neutral_display is None:
+            neutral_wb = _kelvin_to_acescg_gain(BASE_KELVIN + a.wb_temp)
+            neutral_tint = _tint_to_acescg_gain(a.tint)
+            base_ev = 0.0 if self.input_kind == INPUT_RASTER else BASE_EXPOSURE_OFFSET_V2
+            neutral_ev = float(2.0 ** (a.exposure_ev + base_ev))
+            neutral_gain = (neutral_wb * neutral_tint * neutral_ev).astype(np.float32)
+            neutral_scene = img if np.allclose(neutral_gain, 1.0) else img * neutral_gain
+            neutral_display = self._render_neutral_scene(
+                neutral_scene, tone_curve=self.input_kind != INPUT_RASTER)
+            self._neutral_cache[neutral_key] = neutral_display
+            if len(self._neutral_cache) > 4:
+                self._neutral_cache.pop(next(iter(self._neutral_cache)))
+        return neutral_display
+
+    def render_neutral_preview(self, downscale: bool = True):
+        """Return the 0%-intensity comparison without mutating frame settings."""
+        if self.intermediate_acescg is None:
+            return None
+        img = self.intermediate_acescg
+        if downscale:
+            h, w = img.shape[:2]
+            img = cv2.resize(img, (w // 3, h // 3), interpolation=cv2.INTER_LINEAR)
+        return np.clip(self._neutral_display(img, downscale), 0.0, 1.0)
+
     def _render(self, downscale=False):
         t0  = time.time()
         v   = self.vibe          # film-stock parameters
@@ -867,6 +956,17 @@ class FlashbackProcessor:
         if downscale:
             h, w = img.shape[:2]
             img = cv2.resize(img, (w // 3, h // 3), interpolation=cv2.INTER_LINEAR)
+
+        intensity = float(np.clip(getattr(a, 'filter_intensity', 1.0), 0.0, 1.0))
+
+        # Intensity zero is a stable, calibrated One35 V2 rendering.  It is
+        # deliberately independent of the selected preset, including that
+        # preset's exposure offset and film-character exposure shaping.
+        neutral_display = None
+        if intensity < 1.0:
+            neutral_display = self._neutral_display(img, downscale)
+            if intensity <= 0.0:
+                return np.clip(neutral_display, 0.0, 1.0)
 
         push_pull_ev = float(a.push_pull_ev)
 
@@ -878,7 +978,8 @@ class FlashbackProcessor:
 
         wb   = _kelvin_to_acescg_gain(BASE_KELVIN + a.wb_temp)
         tint = _tint_to_acescg_gain(a.tint)
-        ev   = float(2.0 ** (a.exposure_ev + v.base_exposure_offset_v2 + pre_lut_ev))
+        base_ev = 0.0 if self.input_kind == INPUT_RASTER else v.base_exposure_offset_v2
+        ev   = float(2.0 ** (a.exposure_ev + base_ev + pre_lut_ev))
         gain = (wb * tint * ev).astype(np.float32)
         if not np.allclose(gain, 1.0):
             img = img * gain
@@ -886,13 +987,13 @@ class FlashbackProcessor:
         grain_driver = f * rev_ev + push_pull_ev
         lut_path = v.enable_lut and self.lut is not None
 
-        # Resident stage lists (full-res only; downscale previews skip effects).
-        # Pre-LUT order is vignette -> bloom -> CNR: bloom is generated from the
+        # Pre-LUT effects also run on scrub previews now that halation is no
+        # longer baked into the source. Post-LUT spatial texture remains full-res.
+        # Order is halation -> vignette -> bloom -> CNR.
         # already-vignetted (illumination-falloff) image, as a real lens does, so
         # dimmed perimeter highlights emit less glow and bloom concentrates where
         # the image is actually bright.
-        pre_stages, pre_cpu = (([], []) if downscale
-                               else self._resident_pre_lut_stages(v, lut_path))
+        pre_stages, pre_cpu = self._resident_pre_lut_stages(v, lut_path)
         post_tail, grain_layer = (([], None) if downscale
                                   else self._resident_post_lut_stages(v, img.shape, grain_driver))
 
@@ -972,7 +1073,8 @@ class FlashbackProcessor:
                             img_display, pct(v.grain_strength_pct),
                             highlight_bias=self._grain_highlight_bias(grain_driver),
                             grain_layer=grain_layer)
-                    if v.enable_sharpen and v.sharpen_strength_pct > 0:
+                    if (not (v.enable_digital_noise or v.enable_jpeg_artifacts)
+                            and v.enable_sharpen and v.sharpen_strength_pct > 0):
                         with _timed("sharpen"):
                             img_display = apply_sharpen(
                                 img_display, pct(v.sharpen_strength_pct), v.sharpen_radius)
@@ -981,6 +1083,39 @@ class FlashbackProcessor:
         if not np.isclose(post_gain, 1.0):
             lin = _srgb_eotf(img_display) * post_gain
             img_display = _srgb_oetf(np.clip(lin, 0.0, 1.0))
+
+        # Digital-camera texture is deliberately distinct from film-grain tiles.
+        # JPEG inputs already carry codec defects, so compression is not stacked
+        # unless a profile explicitly opts in. Lossless PNG/TIFF inputs can still
+        # receive the target camera's JPEG character.
+        if not downscale and v.enable_digital_noise:
+            img_display = apply_digital_noise(
+                img_display,
+                pct(v.luma_noise_strength_pct), v.luma_noise_scale,
+                pct(v.chroma_noise_strength_pct), v.chroma_noise_scale,
+                v.chroma_noise_correlation, pct(v.shadow_noise_bias_pct))
+        source_ext = os.path.splitext(self.current_file or '')[1].lower()
+        source_is_jpeg = source_ext in ('.jpg', '.jpeg')
+        jpeg_active = (v.enable_jpeg_artifacts and
+                       (not source_is_jpeg or v.jpeg_degrade_raster_inputs))
+        if not downscale and jpeg_active:
+            img_display = apply_jpeg_artifacts(
+                img_display, pct(v.jpeg_artifact_strength_pct), v.jpeg_block_size,
+                pct(v.jpeg_chroma_degradation_pct),
+                pct(v.jpeg_ringing_strength_pct))
+        if (not downscale and (v.enable_digital_noise or v.enable_jpeg_artifacts)
+                and v.enable_sharpen and v.sharpen_strength_pct > 0):
+            img_display = apply_sharpen(
+                img_display, pct(v.sharpen_strength_pct), v.sharpen_radius)
+
+        if neutral_display is not None:
+            # Blend in linear display light.  A gamma-space opacity blend makes
+            # mid-tones muddy and causes intensity to behave unlike a density
+            # control; linear light keeps the endpoints and tonal energy sane.
+            neutral_lin = _srgb_eotf(neutral_display)
+            preset_lin = _srgb_eotf(img_display)
+            mixed = neutral_lin + (preset_lin - neutral_lin) * intensity
+            img_display = _srgb_oetf(np.clip(mixed, 0.0, 1.0))
 
         _timing_print(f"  render: {(time.time()-t0)*1000:6.2f} ms")
         return np.clip(img_display, 0.0, 1.0)
@@ -1000,8 +1135,13 @@ class FlashbackProcessor:
         elif rot == 270:
             self.intermediate_acescg = np.ascontiguousarray(
                 np.rot90(self.intermediate_acescg, k=1))
+        self._neutral_cache.clear()
         self.adjustments.rotation = 0
         return self.render_preview()
+
+
+# Backwards-compatible import for older projects, tests, and third-party code.
+FlashbackProcessor = ImageProcessor
 
 
 # =============================================================================
@@ -1059,8 +1199,27 @@ def export_image(processor, output_path, quality=95, as_tiff=False,
     img8 = np.clip(img * 255.0, 0, 255).astype(np.uint8)
     try:
         from PIL import Image
-        Image.fromarray(img8, mode='RGB').save(output_path, 'JPEG',
-                                               quality=quality, optimize=True)
+        save_args = {'quality': quality, 'optimize': True}
+        source_path = getattr(processor, 'current_file', None)
+        if source_path and is_raster_path(source_path):
+            try:
+                with Image.open(source_path) as source:
+                    exif = source.getexif()
+                    # Pixels have already been EXIF-transposed and any user
+                    # rotation baked in, so exporting the old orientation tag
+                    # would rotate the result a second time.
+                    if exif:
+                        exif[274] = 1
+                        save_args['exif'] = exif.tobytes()
+                    if source.info.get('icc_profile'):
+                        save_args['icc_profile'] = source.info['icc_profile']
+                    if source.info.get('dpi'):
+                        save_args['dpi'] = source.info['dpi']
+            except (OSError, ValueError):
+                log.warning("[processor] Could not preserve source JPEG metadata: %s",
+                            source_path, exc_info=True)
+        Image.fromarray(img8).save(
+            output_path, 'JPEG', **save_args)
         return True
     except Exception:
         bgr = cv2.cvtColor(img8, cv2.COLOR_RGB2BGR)

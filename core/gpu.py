@@ -974,7 +974,7 @@ class GPUPipeline:
     # ------------------------------------------------------------------
 
     def vignette_frame(self, frame: "Frame", strength: float, color_shift: float,
-                       feather: float):
+                       feather: float, tint_rgb=(1.0, 1.0, 1.0)):
         """Cosine vignette with cool-edge tint, texture-resident: Frame in ->
         Frame out. Resident twin of effects.apply_vignette (linear ACEScg).
         Returns the input unchanged when strength<=0, or None if no GPU.
@@ -985,8 +985,10 @@ class GPUPipeline:
             return frame
         h, w = frame.shape[:2]
         dst = self._create_tex(frame.shape)
-        uni = self._uniform(struct.pack('4f', float(strength), float(color_shift),
-                                        float(feather), 0.0))
+        uni = self._uniform(struct.pack('8f', float(strength), float(color_shift),
+                                        float(feather), 0.0,
+                                        float(tint_rgb[0]), float(tint_rgb[1]),
+                                        float(tint_rgb[2]), 0.0))
         bg = self._device.create_bind_group(layout=self._vignette_bg_layout, entries=[
             {'binding': 0, 'resource': frame.gpu().create_view()},
             {'binding': 1, 'resource': dst.create_view()},

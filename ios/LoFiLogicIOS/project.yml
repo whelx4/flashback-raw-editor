@@ -29,4 +29,6 @@ targets:
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace: YES
         INFOPLIST_KEY_UIFileSharingEnabled: YES
-        TARGETED_DEVICE_FAMILY: 1
+        TARGETED_DEVICE_FAMILY: "1,2"
+        INFOPLIST_KEY_NSPhotoLibraryUsageDescription: "Choose Sony P43 and other compact-camera photos to edit."
+        INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription: "Save your finished LoFi Logic JPEGs to Photos."

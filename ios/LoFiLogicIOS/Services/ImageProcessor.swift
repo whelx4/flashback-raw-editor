@@ -2,53 +2,31 @@ import Foundation
 import CoreImage
 import CoreImage.CIFilterBuiltins
 import UIKit
+import UniformTypeIdentifiers
 
-/// iOS preview adapter. It consumes the same LUT/profile catalog as Windows;
-/// Core Image equivalents provide optical and texture parity for mobile.
-final class One35Processor: @unchecked Sendable {
-    static let shared = One35Processor()
+/// Universal iPhone/iPad processor for finished compact-camera images.
+/// It consumes the same preset catalog as the Windows editor.
+final class ImageProcessor: @unchecked Sendable {
+    static let shared = ImageProcessor()
     private let context = CIContext(options: [.cacheIntermediates: true])
     private var cubes: [String: (dimension: Int, data: Data)] = [:]
     private let renderLock = NSLock()
-    private let rawExtensions: Set<String> = [
-        "dng", "arw", "nef", "nrw", "cr2", "cr3", "raf", "orf", "rw2", "pef", "srw", "raw"
-    ]
 
     func render(url: URL, preset: Preset, intensity: Double, maxDimension: CGFloat = 1800) throws -> UIImage {
         renderLock.lock()
         defer { renderLock.unlock() }
-        let ext = url.pathExtension.lowercased()
-        let neutral: CIImage
-        if rawExtensions.contains(ext) {
-            guard let raw = CIFilter(imageURL: url)?.outputImage else {
-                throw RenderError.cannotDecode
-            }
-            neutral = raw.oriented(.up)
-        } else {
-            guard let raster = CIImage(
-                contentsOf: url,
-                options: [.applyOrientationProperty: true]
-            ) else { throw RenderError.cannotDecode }
-            neutral = raster
-        }
-        var lutInput = neutral
-        // Windows applies the ONE35/raw preset baseline before ACEScct. The
-        // iOS-specific cubes already compose linear-sRGB -> ACEScg -> ACEScct;
-        // apply the raw baseline here while keeping raster inputs unchanged.
-        if rawExtensions.contains(ext),
-           let exposed = CIFilter(name: "CIExposureAdjust", parameters: [
-            kCIInputImageKey: lutInput, kCIInputEVKey: 2.0
-           ])?.outputImage {
-            lutInput = exposed
-        }
+        guard let neutral = CIImage(
+            contentsOf: url,
+            options: [.applyOrientationProperty: true]
+        ) else { throw RenderError.cannotDecode }
+        let lutInput = neutral
         let cube = try loadCube(named: preset.iosLUT)
         let colorCube = CIFilter.colorCube()
         colorCube.inputImage = lutInput
         colorCube.cubeDimension = Float(cube.dimension)
         colorCube.cubeData = cube.data
         guard var styled = colorCube.outputImage else { throw RenderError.cannotRender }
-        styled = applyCameraCharacter(to: styled, preset: preset,
-                                      sourceIsJPEG: ["jpg", "jpeg"].contains(ext))
+        styled = applyCameraCharacter(to: styled, preset: preset, sourceIsJPEG: true)
 
         let amount = min(max(intensity, 0), 1)
         let mask = CIImage(color: CIColor(red: 1, green: 1, blue: 1, alpha: amount))
@@ -141,8 +119,7 @@ final class One35Processor: @unchecked Sendable {
             kCIInputImageKey: image, kCIInputSharpnessKey: optics.sharpen
            ])?.outputImage { image = output.cropped(to: extent) }
 
-        // Do not double-compress imported JPEG/PNG files. On a clean ONE35 RAW,
-        // the round-trip emulates the final in-camera JPEG of toy digital looks.
+        // Do not stack simulated compression on a finished compact-camera file.
         if preset.usesDigitalTexture && !sourceIsJPEG && texture.jpegQuality < 1,
            let cg = context.createCGImage(image, from: extent),
            let data = UIImage(cgImage: cg).jpegData(compressionQuality: CGFloat(texture.jpegQuality)),
@@ -152,6 +129,31 @@ final class One35Processor: @unchecked Sendable {
                 y: extent.origin.y - decoded.extent.origin.y))
         }
         return image.cropped(to: extent)
+    }
+
+    func jpegData(for image: UIImage, preservingMetadataFrom sourceURL: URL,
+                  quality: Double = 0.95) throws -> Data {
+        guard let cgImage = image.cgImage else { throw RenderError.cannotRender }
+        let output = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(
+            output, UTType.jpeg.identifier as CFString, 1, nil
+        ) else { throw RenderError.cannotRender }
+
+        var properties: [CFString: Any] = [:]
+        if let source = CGImageSourceCreateWithURL(sourceURL as CFURL, nil),
+           let sourceProperties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil)
+                as? [CFString: Any] {
+            properties = sourceProperties
+        }
+        properties[kCGImagePropertyOrientation] = 1
+        properties[kCGImageDestinationLossyCompressionQuality] = quality
+        properties[kCGImagePropertyPixelWidth] = cgImage.width
+        properties[kCGImagePropertyPixelHeight] = cgImage.height
+        CGImageDestinationAddImage(destination, cgImage, properties as CFDictionary)
+        guard CGImageDestinationFinalize(destination) else {
+            throw RenderError.cannotRender
+        }
+        return output as Data
     }
 
     private func radialEdgeMask(extent: CGRect) -> CIImage? {
@@ -207,7 +209,7 @@ final class One35Processor: @unchecked Sendable {
         case cannotDecode, cannotRender, missingLUT(String), invalidLUT(String)
         var errorDescription: String? {
             switch self {
-            case .cannotDecode: return "This RAW or image file could not be decoded."
+            case .cannotDecode: return "This photo could not be decoded."
             case .cannotRender: return "The preview could not be rendered."
             case .missingLUT(let name): return "Missing preset LUT: \(name)"
             case .invalidLUT(let name): return "Invalid preset LUT: \(name)"

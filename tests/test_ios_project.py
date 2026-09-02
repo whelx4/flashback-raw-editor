@@ -27,6 +27,8 @@ def test_ios_bundle_declares_shared_catalog_and_luts():
     assert project.count("buildPhase: resources") == 2
     assert "MARKETING_VERSION: 0.1.0" in project
     assert "CURRENT_PROJECT_VERSION: 1" in project
+    assert 'TARGETED_DEVICE_FAMILY: "1,2"' in project
+    assert "NSPhotoLibraryAddUsageDescription" in project
     catalog = json.loads((ROOT / "shared" / "presets.json").read_text(encoding="utf-8"))
     missing = [preset["lut"] for preset in catalog["presets"]
                if not (ROOT / "assets" / "luts" / preset["lut"]).is_file()]
@@ -40,10 +42,12 @@ def test_ios_flow_has_import_edit_develop_gallery_and_share():
     content = (IOS / "Views" / "ContentView.swift").read_text(encoding="utf-8")
     editor = (IOS / "Views" / "FrameEditorView.swift").read_text(encoding="utf-8")
     store = (IOS / "Services" / "RollStore.swift").read_text(encoding="utf-8")
-    assert "fileImporter" in content and "developedOnly: true" in content
-    assert "FILTER INTENSITY" in editor and "Develop JPEG" in editor
+    assert "fileImporter" in content and "PhotosPicker" in content
+    assert "developedOnly: true" in content
+    assert "FILTER INTENSITY" in editor and "Save to Photos" in editor
     assert "ShareLink" in editor and "beforePreview" in editor
-    assert "saveDevelopedJPEG" in store and 'appendingPathComponent("Developed"' in store
+    assert "saveDevelopedJPEG" in store and "saveToPhotoLibrary" in store
+    assert 'appendingPathComponent("Developed"' in store
 
 
 def test_unsigned_ipa_workflow_builds_and_verifies_device_bundle():
@@ -54,4 +58,4 @@ def test_unsigned_ipa_workflow_builds_and_verifies_device_bundle():
     assert "-sdk iphoneos" in workflow
     assert "CODE_SIGNING_ALLOWED=NO" in workflow
     assert "com.lofilogic.ios" in workflow
-    assert "LoFiLogic-iPhone-unsigned.ipa" in workflow
+    assert "LoFiLogic-iOS-unsigned.ipa" in workflow

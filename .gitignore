@@ -8,6 +8,7 @@ venv-build/
 # build files
 build/
 dist/
+dist_verified/
 
 # macOS
 .DS_Store
@@ -29,3 +30,9 @@ output/
 !.vscode/launch.json
 !.vscode/extensions.json
 .idea/
+
+# Xcode / XcodeGen output
+ios/LoFiLogicIOS/LoFiLogic.xcodeproj/
+ios/LoFiLogicIOS/DerivedData/
+*.xcuserstate
+xcuserdata/

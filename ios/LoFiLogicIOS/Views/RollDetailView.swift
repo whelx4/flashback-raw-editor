@@ -28,7 +28,7 @@ struct RollDetailView: View {
                 }
             }
         }
-        .navigationTitle(roll?.name ?? "Roll")
+        .navigationTitle(roll?.name ?? "Import")
     }
 }
 
@@ -51,7 +51,7 @@ struct MediaPreview: View {
             }
             guard let preset = catalog.preset(id: frame.presetID) else { return }
             image = try? await Task.detached {
-                try One35Processor.shared.render(url: url, preset: preset, intensity: frame.intensity, maxDimension: 420)
+                try ImageProcessor.shared.render(url: url, preset: preset, intensity: frame.intensity, maxDimension: 420)
             }.value
         }
     }

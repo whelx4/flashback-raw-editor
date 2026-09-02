@@ -1,5 +1,34 @@
 # Changelog
 
+## Unreleased
+
+- Redeveloped the product around finished Sony Cyber-shot DSC-P43 JPEGs; removed
+  connected-Flashback import and DNG export from the normal Windows and Apple flows.
+- Added EXIF-based P43 recognition and metadata-preserving Windows JPEG export.
+- Reduced the default filter intensity from 100% to 60% so presets do not
+  overpower the P43's baked CCD, flash, sharpening, and white-balance character.
+- Added an **Open P43 folder** Windows workflow and produced a fresh packaged EXE.
+- Made the SwiftUI application universal for iPhone and iPad, with native Photos
+  and Files import plus add-only Photos export.
+- Renamed the mobile processor around finished images and removed its RAW-specific
+  ONE35 exposure path.
+- Updated the unsigned GitHub build to emit one universal AltStore IPA.
+- Refocused the public catalog to 20 disposable-film, half-frame, toy-digital,
+  paper-camera, and DonCamera-inspired looks; Flashback Classic is no longer public.
+- Split look construction into reusable color, optical and texture profiles.
+- Moved halation out of the cached source and into the preset render, fixing
+  preset switching and guaranteeing that 0% intensity is neutral.
+- Added arbitrary RGB vignette tint, film-grain scale, deterministic digital
+  luma/chroma noise and source-aware final JPEG character.
+- Extended the iOS Core Image renderer to consume the same profile metadata and
+  approximate the Windows optical/texture stages.
+- Completed the iOS Photo Lab → develop → Gallery loop with persistent JPEGs,
+  sharing, and press-to-compare previews.
+- Added iOS-specific linear-input LUT companions and corrected `.cube` versus
+  Core Image axis ordering so mobile no longer swaps LUT dimensions.
+- Added a packaged-build smoke-test mode and verified the Windows onedir bundle
+  with all 21 LUTs and GPU shader resources.
+
 ## 1.6.6 — 2026-07-25
 
 A maintenance release: two DNG fixes, and thumbnails that stop re-reading the

@@ -14,6 +14,30 @@ from core.effects import (
 )
 
 
+def test_rgb_vignette_can_make_brown_edges_without_tinting_center(neutral_gray):
+    out = apply_vignette(neutral_gray, strength=0.3, color_shift=0.0,
+                         feather=1.0, tint_rgb=(1.0, 0.8, 0.6))
+    h, w = out.shape[:2]
+    center = out[h // 2, w // 2]
+    corner = out[0, 0]
+    assert np.allclose(center, neutral_gray[h // 2, w // 2], atol=2e-3)
+    assert corner[0] > corner[1] > corner[2]
+
+
+def test_digital_noise_is_deterministic_and_nonzero(neutral_gray):
+    from core.effects import apply_digital_noise
+    a = apply_digital_noise(neutral_gray, .02, 1.0, .01, 2.0, .3, .6)
+    b = apply_digital_noise(neutral_gray, .02, 1.0, .01, 2.0, .3, .6)
+    assert np.array_equal(a, b)
+    assert float(np.std(a - neutral_gray)) > .001
+
+
+def test_jpeg_artifact_zero_is_noop(neutral_gray):
+    from core.effects import apply_jpeg_artifacts
+    out = apply_jpeg_artifacts(neutral_gray)
+    assert np.array_equal(out, neutral_gray)
+
+
 @pytest.fixture
 def neutral_gray():
     """64x64 neutral grey float32 image."""

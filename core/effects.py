@@ -6,14 +6,14 @@ but linear-light effects (apply_bloom with linear=True, apply_halation) can
 return values >1 since they run before the display transform.
 
 Render-pipeline ordering (see processor._render):
-  vignette → bloom → CNR                      (linear ACEScg, pre-LUT)
+  halation → vignette → bloom → CNR           (linear ACEScg, pre-LUT)
   ACEScct encode → LUT                         (display transform)
   CA → edge-softness → softness → grain → sharpen   (display sRGB, post-LUT)
 
 At full res with a LUT active these all run as one GPU-resident chain (one
 upload/readback); these numpy functions are the oracle + no-GPU fallback.
-Halation is baked into the cached intermediate at load time (see
-processor.load_image) so it benefits both the live preview and export.
+Halation is a preset render stage, so changing presets is immediate and a
+zero-intensity render remains genuinely neutral.
 """
 import numpy as np
 import cv2
@@ -354,7 +354,8 @@ def apply_sharpen(image, strength=0.5, radius=SHARPEN_RADIUS):
     return unsharp_mask(image, blurred, strength)
 
 
-def apply_vignette(image, strength=0.5, color_shift=0.05, feather=1.0):
+def apply_vignette(image, strength=0.5, color_shift=0.05, feather=1.0,
+                   tint_rgb=(1.0, 1.0, 1.0)):
     """
     Smooth cosine vignette with a cool-edge tint.
 
@@ -382,10 +383,84 @@ def apply_vignette(image, strength=0.5, color_shift=0.05, feather=1.0):
     dark = 1.0 - strength * (1.0 - falloff)
     edge = 1.0 - falloff  # 0 at center, 1 at corners
     result = np.empty_like(image)
-    result[:, :, 0] = np.maximum(0.0, image[:, :, 0] * (dark - color_shift * edge))
-    result[:, :, 1] = np.maximum(0.0, image[:, :, 1] * dark)
-    result[:, :, 2] = np.maximum(0.0, image[:, :, 2] * (dark + color_shift * 0.4 * edge))
+    legacy_delta = np.array([-color_shift, 0.0, color_shift * 0.4], dtype=np.float32)
+    base_factors = dark[..., None] + edge[..., None] * legacy_delta
+    tint = np.asarray(tint_rgb, dtype=np.float32)
+    factors = base_factors * (1.0 + edge[..., None] * (tint - 1.0))
+    result[:] = np.maximum(0.0, image * factors)
     return result
+
+
+def apply_digital_noise(image, luma_strength=0.0, luma_scale=1.0,
+                        chroma_strength=0.0, chroma_scale=2.0,
+                        chroma_correlation=0.35, shadow_bias=0.5,
+                        seed=0x10F135):
+    """Deterministic low-cost sensor-noise model for toy digital cameras.
+
+    Luma and chroma are generated at independent spatial scales. The fixed seed
+    keeps previews stable while the amount slider is moved; strength is an
+    amplitude, not a request for a fresh random sensor read every render.
+    """
+    if luma_strength <= 0 and chroma_strength <= 0:
+        return image.astype(np.float32, copy=True)
+    img = image.astype(np.float32, copy=False)
+    h, w = img.shape[:2]
+    rng = np.random.default_rng(int(seed) ^ (h << 16) ^ w)
+
+    def scaled_noise(scale, channels=1):
+        scale = max(float(scale), 1.0)
+        nh, nw = max(2, int(np.ceil(h / scale))), max(2, int(np.ceil(w / scale)))
+        shape = (nh, nw) if channels == 1 else (nh, nw, channels)
+        n = rng.standard_normal(shape).astype(np.float32)
+        return cv2.resize(n, (w, h), interpolation=cv2.INTER_LINEAR)
+
+    luma = scaled_noise(luma_scale)
+    chroma = scaled_noise(chroma_scale, 2)
+    corr = float(np.clip(chroma_correlation, 0.0, 1.0))
+    common = scaled_noise(chroma_scale)
+    chroma[..., 0] = chroma[..., 0] * (1.0 - corr) + common * corr
+    chroma[..., 1] = chroma[..., 1] * (1.0 - corr) + common * corr
+    y = 0.2126 * img[..., 0] + 0.7152 * img[..., 1] + 0.0722 * img[..., 2]
+    shadow_weight = 1.0 + float(np.clip(shadow_bias, 0.0, 1.0)) * (1.0 - y)
+    out = img + luma[..., None] * float(luma_strength) * shadow_weight[..., None]
+    # Opposed channel deltas preserve brightness better than independent RGB noise.
+    out[..., 0] += chroma[..., 0] * float(chroma_strength) * shadow_weight
+    out[..., 1] -= (chroma[..., 0] + chroma[..., 1]) * float(chroma_strength) * 0.5 * shadow_weight
+    out[..., 2] += chroma[..., 1] * float(chroma_strength) * shadow_weight
+    return np.clip(out, 0.0, 1.0).astype(np.float32)
+
+
+def apply_jpeg_artifacts(image, strength=0.0, block_size=8,
+                         chroma_degradation=0.0, ringing_strength=0.0):
+    """Simulate a small-camera JPEG as an optional final display-space stage."""
+    if strength <= 0 and chroma_degradation <= 0 and ringing_strength <= 0:
+        return image.astype(np.float32, copy=True)
+    img8 = np.clip(image * 255.0, 0, 255).astype(np.uint8)
+    # JPEG itself is always 8x8. Scaling before the round trip lets a profile
+    # request a coarser apparent block without inventing a custom codec.
+    bs = max(4, int(block_size))
+    scale = min(1.0, 8.0 / bs)
+    work = img8
+    if scale < 1.0:
+        work = cv2.resize(work, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+    quality = int(round(96.0 - 66.0 * np.clip(strength, 0.0, 1.0)))
+    bgr = cv2.cvtColor(work, cv2.COLOR_RGB2BGR)
+    ok, encoded = cv2.imencode('.jpg', bgr, [cv2.IMWRITE_JPEG_QUALITY, quality])
+    if ok:
+        work = cv2.cvtColor(cv2.imdecode(encoded, cv2.IMREAD_COLOR), cv2.COLOR_BGR2RGB)
+    if work.shape[:2] != img8.shape[:2]:
+        work = cv2.resize(work, (img8.shape[1], img8.shape[0]), interpolation=cv2.INTER_LINEAR)
+    out = work.astype(np.float32) / 255.0
+    if chroma_degradation > 0:
+        ycc = cv2.cvtColor(out, cv2.COLOR_RGB2YCrCb)
+        sigma = 0.4 + 2.5 * float(np.clip(chroma_degradation, 0.0, 1.0))
+        ycc[..., 1] = cv2.GaussianBlur(ycc[..., 1], (0, 0), sigma)
+        ycc[..., 2] = cv2.GaussianBlur(ycc[..., 2], (0, 0), sigma)
+        out = cv2.cvtColor(ycc, cv2.COLOR_YCrCb2RGB)
+    if ringing_strength > 0:
+        blur = cv2.GaussianBlur(out, (0, 0), 0.7)
+        out = out + (out - blur) * float(np.clip(ringing_strength, 0.0, 1.0))
+    return np.clip(out, 0.0, 1.0).astype(np.float32)
 
 
 def apply_bloom(image, strength=0.3, threshold=0.6, linear=False):
@@ -424,5 +499,3 @@ def apply_bloom(image, strength=0.3, threshold=0.6, linear=False):
     else:
         result = 1.0 - (1.0 - image) * (1.0 - bloom_layer * strength)
         return np.clip(result, 0.0, 1.0).astype(np.float32)
-
-

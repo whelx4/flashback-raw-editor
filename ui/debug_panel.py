@@ -106,8 +106,9 @@ class DebugPanel(QWidget):
         lut_layout.addWidget(self.btn_load_lut)
         form_layout.addLayout(lut_layout)
 
-        # --- Baked Effects Group (only halation truly bakes into the intermediate) ---
-        baked_group = QGroupBox("Baked Effects (Require Image Reload)")
+        # Halation is a live preset stage; it must change with the selected
+        # preset and disappear at 0% filter intensity.
+        baked_group = QGroupBox("Halation")
         baked_group.setStyleSheet("QGroupBox { color: #FF8A35; font-weight: bold; border: 1px solid #555; border-radius: 6px; margin-top: 8px; padding-top: 8px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; }")
         baked_layout = QFormLayout(baked_group)
         baked_layout.setSpacing(8)
@@ -115,7 +116,7 @@ class DebugPanel(QWidget):
         # Halation
         self.chk_halation = QCheckBox("Enable Halation")
         self.chk_halation.setChecked(True)
-        self.chk_halation.stateChanged.connect(self.update_config)
+        self.chk_halation.stateChanged.connect(self.update_preview)
         baked_layout.addRow(self.chk_halation)
 
         self.spin_halation_thresh = self._create_double_spin(-2.0, 8.0, HALATION_THRESHOLD_STOPS, 0.25, suffix=" EV")
@@ -123,16 +124,16 @@ class DebugPanel(QWidget):
             "Stops above 18% middle grey. 0 = middle grey, +5 ≈ scene white,\n"
             "+4 (default) targets specular highlights, +6 only the very brightest."
         )
-        self.spin_halation_thresh.valueChanged.connect(self.update_config)
+        self.spin_halation_thresh.valueChanged.connect(self.update_preview)
         baked_layout.addRow("Threshold:", self.spin_halation_thresh)
 
         self.spin_halation_blur = self._create_spin(1, 100, int(HALATION_BLUR_RADIUS))
         self.spin_halation_blur.setSuffix(" px")
-        self.spin_halation_blur.valueChanged.connect(self.update_config)
+        self.spin_halation_blur.valueChanged.connect(self.update_preview)
         baked_layout.addRow("Blur Radius:", self.spin_halation_blur)
 
         self.spin_halation_str = self._create_double_spin(0.0, 300.0, HALATION_STRENGTH_PCT, 5.0, suffix=" %")
-        self.spin_halation_str.valueChanged.connect(self.update_config)
+        self.spin_halation_str.valueChanged.connect(self.update_preview)
         baked_layout.addRow("Strength:", self.spin_halation_str)
 
         self.spin_halation_warmth = self._create_double_spin(0.0, 300.0, HALATION_WARMTH_PCT, 5.0, suffix=" %")
@@ -140,7 +141,7 @@ class DebugPanel(QWidget):
             "Halo chroma. 100% = physical red-orange (and the legacy average "
             "colour); 0% = colourless glow; >100% pushes toward the saturated "
             "no-remjet / CineStill halo. Always reddens outward.")
-        self.spin_halation_warmth.valueChanged.connect(self.update_config)
+        self.spin_halation_warmth.valueChanged.connect(self.update_preview)
         baked_layout.addRow("Warmth:", self.spin_halation_warmth)
 
         form_layout.addWidget(baked_group)
@@ -304,29 +305,6 @@ class DebugPanel(QWidget):
 
         form_layout.addWidget(live_group)
 
-        # --- DNG Export Group ---
-        dng_group = QGroupBox("DNG Export")
-        dng_group.setStyleSheet("QGroupBox { color: #d0d0d0; font-weight: bold; border: 1px solid #555; border-radius: 6px; margin-top: 8px; padding-top: 8px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; }")
-        dng_layout = QHBoxLayout(dng_group)
-        dng_layout.setSpacing(6)
-
-        dng_layout.addWidget(QLabel("Profile Name:"))
-        self.dng_profile_edit = QLineEdit()
-        self.dng_profile_edit.setPlaceholderText("Flashback Standard")
-        self.dng_profile_edit.setText(
-            self.parent_editor.current_vibe.dng_profile_name
-            if self.parent_editor else 'Flashback Standard'
-        )
-        self.dng_profile_edit.setStyleSheet("QLineEdit { background-color: #3d3d3d; color: #d0d0d0; border: 1px solid #555; border-radius: 4px; padding: 4px; }")
-        dng_layout.addWidget(self.dng_profile_edit, 1)
-
-        btn_set_profile = QPushButton("Set")
-        btn_set_profile.setStyleSheet(btn_style)
-        btn_set_profile.clicked.connect(self._on_set_dng_profile)
-        dng_layout.addWidget(btn_set_profile)
-
-        form_layout.addWidget(dng_group)
-
         # --- LUT Profiling Group ---
         lut_prof_group = QGroupBox("LUT Profiling")
         lut_prof_group.setStyleSheet("QGroupBox { color: #d0d0d0; font-weight: bold; border: 1px solid #555; border-radius: 6px; margin-top: 8px; padding-top: 8px; } QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; }")
@@ -373,17 +351,6 @@ class DebugPanel(QWidget):
         )
         folders_info.setStyleSheet("color: #888; font-size: 11px;")
         folders_layout.addWidget(folders_info)
-
-        self.lbl_default_import = QLabel()
-        self.lbl_default_import.setStyleSheet("color: #d0d0d0; font-size: 11px;")
-        self.lbl_default_import.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self.lbl_default_import.setWordWrap(True)
-        self.btn_default_import = QPushButton("Set Camera Import Folder…")
-        self.btn_default_import.setStyleSheet(btn_style)
-        self.btn_default_import.clicked.connect(self._on_set_default_import_dir)
-        folders_layout.addWidget(QLabel("Camera import folder:"))
-        folders_layout.addWidget(self.lbl_default_import)
-        folders_layout.addWidget(self.btn_default_import)
 
         self.lbl_default_export = QLabel()
         self.lbl_default_export.setStyleSheet("color: #d0d0d0; font-size: 11px;")
@@ -488,7 +455,7 @@ class DebugPanel(QWidget):
         for name, w in self._numeric_widgets.items():
             setattr(vibe, name, w.value())
 
-        self.status_label.setText("Config updated. Click 'Reload Image' to apply baked effects.")
+        self.status_label.setText("Config updated.")
 
     def sync_from_config(self):
         """Update all panel widgets from the current vibe."""
@@ -548,23 +515,7 @@ class DebugPanel(QWidget):
         if not self.parent_editor:
             return
         s = self.parent_editor.app_settings
-        self.lbl_default_import.setText(str(s.value("default_camera_import_dir", "—")))
         self.lbl_default_export.setText(str(s.value("default_export_dir", "—")))
-
-    def _on_set_default_import_dir(self):
-        from PySide6.QtWidgets import QFileDialog
-        if not self.parent_editor:
-            return
-        start = str(self.parent_editor.app_settings.value(
-            "default_camera_import_dir", self.parent_editor.camera_import_dir))
-        directory = QFileDialog.getExistingDirectory(
-            self, "Set Default Camera Import Folder", start)
-        if not directory:
-            return
-        self.parent_editor.app_settings.setValue("default_camera_import_dir", directory)
-        self._refresh_default_folder_labels()
-        self.status_label.setText(
-            f"Default camera import folder set. Applies on next launch (currently: {self.parent_editor.camera_import_dir}).")
 
     def _on_set_default_export_dir(self):
         from PySide6.QtWidgets import QFileDialog
@@ -624,4 +575,3 @@ class DebugPanel(QWidget):
         if self.parent_editor:
             self.parent_editor.reload_current_image()
             self.status_label.setText("Image reloaded with new baked settings.")
-

@@ -9,15 +9,17 @@
 //   falloff = pow(0.5*(1+cos(pi*r_norm)), feather)
 //   dark    = 1 - strength*(1-falloff)
 //   edge    = 1 - falloff
-//   r = max(0, in.r * (dark - color_shift*edge))
-//   g = max(0, in.g *  dark)
-//   b = max(0, in.b * (dark + color_shift*0.4*edge))
+//   base = dark + edge * [-color_shift, 0, color_shift*.4]
+//   tint = lerp([1,1,1], tint_rgb, edge)
+//   out = max(0, in * base * tint)
 
 struct U {
     strength:    f32,
     color_shift: f32,
     feather:     f32,
     _p:          f32,
+    tint_rgb:    vec3f,
+    _p2:         f32,
 }
 
 @group(0) @binding(0) var          src: texture_2d<f32>;
@@ -46,10 +48,9 @@ fn main(@builtin(global_invocation_id) gid: vec3u) {
 
     let pi = vec2i(i32(gid.x), i32(gid.y));
     let c = textureLoad(src, pi, 0).rgb;
-    let outc = max(vec3f(0.0), c * vec3f(
-        dark - u.color_shift * edge,
-        dark,
-        dark + u.color_shift * 0.4 * edge,
-    ));
+    let legacy_delta = vec3f(-u.color_shift, 0.0, u.color_shift * 0.4);
+    let base_factors = vec3f(dark) + edge * legacy_delta;
+    let factors = base_factors * (vec3f(1.0) + edge * (u.tint_rgb - vec3f(1.0)));
+    let outc = max(vec3f(0.0), c * factors);
     textureStore(dst, pi, vec4f(outc, 1.0));
 }

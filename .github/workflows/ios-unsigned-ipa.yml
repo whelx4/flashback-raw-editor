@@ -1,4 +1,4 @@
-name: Build unsigned iPhone IPA
+name: Build unsigned iPhone + iPad IPA
 
 on:
   workflow_dispatch:
@@ -42,7 +42,7 @@ jobs:
           xcodegen generate
           test -f LoFiLogic.xcodeproj/project.pbxproj
 
-      - name: Build unsigned iPhone app
+      - name: Build unsigned universal iOS app
         run: |
           set -euo pipefail
           mkdir -p build
@@ -67,7 +67,7 @@ jobs:
           APP_CANDIDATES=(build/ios-derived/Build/Products/Release-iphoneos/*.app)
           APP_PATH="${APP_CANDIDATES[0]:-}"
           if [ -z "$APP_PATH" ] || [ ! -d "$APP_PATH" ]; then
-            echo "No iPhone .app bundle was produced." >&2
+            echo "No iPhone/iPad .app bundle was produced." >&2
             exit 1
           fi
 
@@ -94,8 +94,9 @@ jobs:
           }
 
           IOS_LUT_COUNT="$(find "$APP_PATH" -type f -name 'ios_*.cube' | wc -l | tr -d ' ')"
-          if [ "$IOS_LUT_COUNT" -lt 21 ]; then
-            echo "Expected 21 iOS LUTs, found $IOS_LUT_COUNT." >&2
+          PRESET_COUNT="$(python3 -c 'import json; print(len(json.load(open("shared/presets.json"))["presets"]))')"
+          if [ "$IOS_LUT_COUNT" -lt "$PRESET_COUNT" ]; then
+            echo "Expected $PRESET_COUNT iOS LUTs, found $IOS_LUT_COUNT." >&2
             exit 1
           fi
 
@@ -106,18 +107,18 @@ jobs:
 
           (
             cd dist/ios
-            /usr/bin/zip -qry '../LoFiLogic-iPhone-unsigned.ipa' Payload
+            /usr/bin/zip -qry '../LoFiLogic-iOS-unsigned.ipa' Payload
           )
 
-          test -s dist/LoFiLogic-iPhone-unsigned.ipa
-          /usr/bin/unzip -t dist/LoFiLogic-iPhone-unsigned.ipa
-          shasum -a 256 dist/LoFiLogic-iPhone-unsigned.ipa \
-            > dist/LoFiLogic-iPhone-unsigned.ipa.sha256
+          test -s dist/LoFiLogic-iOS-unsigned.ipa
+          /usr/bin/unzip -t dist/LoFiLogic-iOS-unsigned.ipa
+          shasum -a 256 dist/LoFiLogic-iOS-unsigned.ipa \
+            > dist/LoFiLogic-iOS-unsigned.ipa.sha256
 
           {
-            echo "### Unsigned iPhone build ready"
+            echo "### Unsigned iPhone + iPad build ready"
             echo ""
-            echo "Download the **LoFiLogic-iPhone-unsigned** artifact below."
+            echo "Download the **LoFiLogic-iOS-unsigned** artifact below."
             echo "Unzip it, then install the contained IPA with AltStore Classic."
             echo ""
             echo "Bundle ID: \`$BUNDLE_ID\`"
@@ -128,10 +129,10 @@ jobs:
       - name: Upload unsigned IPA
         uses: actions/upload-artifact@v4
         with:
-          name: LoFiLogic-iPhone-unsigned
+          name: LoFiLogic-iOS-unsigned
           path: |
-            dist/LoFiLogic-iPhone-unsigned.ipa
-            dist/LoFiLogic-iPhone-unsigned.ipa.sha256
+            dist/LoFiLogic-iOS-unsigned.ipa
+            dist/LoFiLogic-iOS-unsigned.ipa.sha256
           if-no-files-found: error
           retention-days: 30
 
@@ -139,7 +140,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: LoFiLogic-iPhone-build-log
+          name: LoFiLogic-iOS-build-log
           path: build/ios-build.log
           if-no-files-found: ignore
           retention-days: 14

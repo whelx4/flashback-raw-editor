@@ -11,7 +11,7 @@ from PySide6.QtCore import Qt, QEvent, QSettings, QStandardPaths
 from PySide6.QtWidgets import QApplication
 from PySide6.QtGui import QSurfaceFormat, QPalette, QColor
 
-from ui.editor import FlashbackEditor
+from ui.editor import LoFiLogicEditor
 from _version import __version__
 
 log = logging.getLogger(__name__)
@@ -54,6 +54,30 @@ _LEGACY_ORG, _LEGACY_APP = "Flashback", "Flashback One35 v2"
 _LEGACY_SETTINGS = ("Flashback", "Editor")
 ORG_NAME, APP_NAME = "LoFi Logic", "LoFi Logic"
 SETTINGS_SCOPE = ("LoFi Logic", "Editor")
+
+
+def _packaged_smoke_test():
+    """Fail fast when a distributable omitted a catalog, LUT, or shader asset."""
+    import colour
+    from core import resource_path
+    from core.config import VIBE_PRESETS, resolve_lut_ref, vibe_config_for
+    from core.preset_catalog import load_preset_catalog
+
+    presets = load_preset_catalog().get("presets", [])
+    if len(presets) < 1:
+        raise RuntimeError("Packaged preset catalog is empty")
+    for preset in presets:
+        preset_id = preset["id"]
+        if preset_id not in VIBE_PRESETS:
+            raise RuntimeError(f"Missing packaged recipe: {preset_id}")
+        path, origin = resolve_lut_ref(vibe_config_for(preset_id).lut_ref)
+        if not path or origin != "factory":
+            raise RuntimeError(f"Missing packaged LUT: {preset_id}")
+        colour.read_LUT(path)
+    shader_dir = resource_path("core/shaders")
+    if not os.path.isdir(shader_dir) or not any(
+            name.endswith(".wgsl") for name in os.listdir(shader_dir)):
+        raise RuntimeError("Packaged GPU shaders are missing")
 
 
 def _migrate_app_identity():
@@ -104,6 +128,10 @@ def main():
     # (which already carry their own [module] prefixes and ✓ / ⚠ / ✗ glyphs).
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
+    if "--smoke-test" in sys.argv:
+        _packaged_smoke_test()
+        return
+
     # Allow fractional DPI scaling (e.g. 125%, 150%) — must be set before QApplication
     QApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
@@ -151,7 +179,7 @@ def main():
     dark.setColor(QPalette.ColorGroup.Disabled, QPalette.ColorRole.ButtonText, QColor(80, 80, 80))
     app.setPalette(dark)
 
-    window = FlashbackEditor()
+    window = LoFiLogicEditor()
     window.setWindowTitle(f"LoFi Logic ({__version__})")
     window.show()
     app.register_editor(window)

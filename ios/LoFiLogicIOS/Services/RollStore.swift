@@ -1,5 +1,11 @@
 import Foundation
 import ImageIO
+import Photos
+
+struct ImportedPhoto: Sendable {
+    let filename: String
+    let data: Data
+}
 
 @MainActor
 final class RollStore: ObservableObject {
@@ -15,8 +21,12 @@ final class RollStore: ObservableObject {
     init() { loadIndex() }
 
     func frameURL(rollID: UUID, frame: RollFrame) -> URL {
-        rootURL.appendingPathComponent(rollID.uuidString, isDirectory: true)
-            .appendingPathComponent("Negatives", isDirectory: true)
+        let batch = rootURL.appendingPathComponent(rollID.uuidString, isDirectory: true)
+        let modern = batch.appendingPathComponent("Originals", isDirectory: true)
+            .appendingPathComponent(frame.filename)
+        if files.fileExists(atPath: modern.path) { return modern }
+        // Read old on-device libraries without exposing the former terminology.
+        return batch.appendingPathComponent("Negatives", isDirectory: true)
             .appendingPathComponent(frame.filename)
     }
 
@@ -62,28 +72,59 @@ final class RollStore: ObservableObject {
                 throw ImportError.noSupportedFiles
             }
 
-            var roll = FilmRoll(
-                name: "Roll \(rolls.count + 1)",
-                frames: valid.map {
-                    RollFrame(filename: $0.lastPathComponent, isOne35V2: isOne35V2DNG($0))
-                }
-            )
-            let negatives = rootURL.appendingPathComponent(roll.id.uuidString)
-                .appendingPathComponent("Negatives", isDirectory: true)
-            try files.createDirectory(at: negatives, withIntermediateDirectories: true)
+            var roll = FilmRoll(name: "Import \(rolls.count + 1)", frames: [])
+            let originals = rootURL.appendingPathComponent(roll.id.uuidString)
+                .appendingPathComponent("Originals", isDirectory: true)
+            try files.createDirectory(at: originals, withIntermediateDirectories: true)
 
-            for (index, source) in valid.enumerated() {
-                let destination = uniqueDestination(for: source.lastPathComponent, in: negatives)
+            for source in valid {
+                let destination = uniqueDestination(for: source.lastPathComponent, in: originals)
                 try files.copyItem(at: source, to: destination)
-                roll.frames[index] = RollFrame(
+                roll.frames.append(RollFrame(
                     filename: destination.lastPathComponent,
-                    isOne35V2: isOne35V2DNG(source)
-                )
+                    sourceCamera: cameraModel(at: source)
+                ))
             }
             rolls.insert(roll, at: 0)
             try saveIndex()
         } catch {
             importError = error.localizedDescription
+        }
+    }
+
+    func importPhotoPayloads(_ payloads: [ImportedPhoto]) async {
+        guard !payloads.isEmpty else { return }
+        do {
+            var batch = FilmRoll(name: "Import \(rolls.count + 1)", frames: [])
+            let originals = rootURL.appendingPathComponent(batch.id.uuidString)
+                .appendingPathComponent("Originals", isDirectory: true)
+            try files.createDirectory(at: originals, withIntermediateDirectories: true)
+            for payload in payloads {
+                let destination = uniqueDestination(for: payload.filename, in: originals)
+                try payload.data.write(to: destination, options: .atomic)
+                batch.frames.append(RollFrame(
+                    filename: destination.lastPathComponent,
+                    sourceCamera: cameraModel(at: destination)
+                ))
+            }
+            rolls.insert(batch, at: 0)
+            try saveIndex()
+        } catch {
+            importError = error.localizedDescription
+        }
+    }
+
+    func saveToPhotoLibrary(_ url: URL) async throws {
+        let status = await withCheckedContinuation { continuation in
+            PHPhotoLibrary.requestAuthorization(for: .addOnly) {
+                continuation.resume(returning: $0)
+            }
+        }
+        guard status == .authorized || status == .limited else {
+            throw ExportError.photoLibraryDenied
+        }
+        try await PHPhotoLibrary.shared().performChanges {
+            PHAssetChangeRequest.creationRequestForAssetFromImage(atFileURL: url)
         }
     }
 
@@ -94,8 +135,7 @@ final class RollStore: ObservableObject {
     }
 
     private let supportedExtensions: Set<String> = [
-        "dng", "arw", "nef", "nrw", "cr2", "cr3", "raf", "orf", "rw2",
-        "pef", "srw", "raw", "jpg", "jpeg", "png", "tif", "tiff", "heic", "heif", "webp"
+        "jpg", "jpeg", "png", "tif", "tiff", "heic", "heif", "webp"
     ]
 
     private func collectSupportedMedia(_ urls: [URL]) throws -> [URL] {
@@ -117,14 +157,15 @@ final class RollStore: ObservableObject {
         return output
     }
 
-    private func isOne35V2DNG(_ url: URL) -> Bool {
-        guard url.pathExtension.lowercased() == "dng" else { return false }
+    private func cameraModel(at url: URL) -> String? {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
               let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
-        else { return false }
+        else { return nil }
         let tiff = properties[kCGImagePropertyTIFFDictionary] as? [CFString: Any]
-        let make = (tiff?[kCGImagePropertyTIFFMake] as? String)?.lowercased() ?? ""
-        return make.contains("flashback")
+        let make = (tiff?[kCGImagePropertyTIFFMake] as? String)?.trimmingCharacters(in: .whitespaces)
+        let model = (tiff?[kCGImagePropertyTIFFModel] as? String)?.trimmingCharacters(in: .whitespaces)
+        if let make, let model, !make.isEmpty, !model.isEmpty { return "\(make) \(model)" }
+        return model ?? make
     }
 
     private func uniqueDestination(for filename: String, in folder: URL) -> URL {
@@ -159,12 +200,17 @@ final class RollStore: ObservableObject {
     enum ImportError: LocalizedError {
         case noSupportedFiles
         var errorDescription: String? {
-            "No supported RAW or image files were found."
+            "No supported JPEG or finished image files were found."
         }
     }
 
     enum ExportError: LocalizedError {
-        case frameMissing
-        var errorDescription: String? { "The selected frame is no longer in this roll." }
+        case frameMissing, photoLibraryDenied
+        var errorDescription: String? {
+            switch self {
+            case .frameMissing: return "The selected photo is no longer in this import."
+            case .photoLibraryDenied: return "Allow LoFi Logic to add photos in Settings."
+            }
+        }
     }
 }
