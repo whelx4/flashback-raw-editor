@@ -11,9 +11,9 @@ This audit records authoritative evidence for the Sony P43 Windows + iPhone/iPad
 | 0% is the source baseline | raster endpoint tests and Before render path | verified |
 | P43 EXIF survives JPEG export | automated EXIF test and real `DSC00007.JPG` export | verified |
 | Whole-folder and individual-file input | Windows file/folder flows and persistence tests | verified |
-| Apple Photos and Files import | `PhotosPicker`, `fileImporter`, and persistent Originals store | implemented; source-validated |
-| Native iPhone and iPad target | `TARGETED_DEVICE_FAMILY: "1,2"` and universal IPA workflow | implemented; source-validated |
-| Save finished Apple render to Photos | add-only permission strings and `PHPhotoLibrary` export | implemented; source-validated |
+| Apple Photos and Files import | `PhotosPicker`, `fileImporter`, persistent Originals store, Xcode build | build-verified |
+| Native iPhone and iPad target | `TARGETED_DEVICE_FAMILY: "1,2"`; inspected universal IPA metadata | build-verified |
+| Save finished Apple render to Photos | add-only permission strings, `PHPhotoLibrary` export, Xcode build | build-verified |
 | Free Windows-based sideload route | universal unsigned IPA workflow and AltStore guide | implemented |
 | Updated Windows distributable | `dist_p43/LoFi Logic/LoFi Logic.exe`; packaged smoke | verified |
 
@@ -21,6 +21,9 @@ This audit records authoritative evidence for the Sony P43 Windows + iPhone/iPad
 
 - 132 Python tests pass.
 - Every Swift file parses without syntax errors using the Swift tree-sitter grammar.
+- GitHub's macOS runner compiles and packages the universal arm64 app successfully.
+- The packaged IPA contains device families 1 and 2, iOS 17.0 minimum metadata, the P43 catalog,
+  all 20 presets, and the 60% default intensity.
 - All 20 public preset LUTs and all 20 iOS companion LUTs are present.
 - A real Sony P43 JPEG renders at 2304×1728 with the 60% default.
 - Its exported EXIF retains `SONY`, `DSC-P43`, and the original capture timestamp.
@@ -28,8 +31,8 @@ This audit records authoritative evidence for the Sony P43 Windows + iPhone/iPad
 - The new packaged Windows EXE stays running in an offscreen launch smoke test and contains the
   shared preset catalog.
 
-## External Apple verification still required
+## Physical-device verification still required
 
-Windows cannot run Xcode. GitHub Actions must compile the universal IPA, after which it must be
-installed on a physical iPhone and iPad through AltStore. That external run is the remaining proof
-for Swift type-checking, Photos permission behavior, and adaptive device layout.
+GitHub Actions has completed the Xcode compile and universal IPA packaging. Installation on a
+physical iPhone and iPad through AltStore remains the final proof for Photos permission behavior,
+real-device image rendering, and adaptive device layout.
