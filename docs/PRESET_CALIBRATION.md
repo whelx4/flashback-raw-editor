@@ -44,6 +44,14 @@ ACEScct encoding and the generator bakes the same values into the iOS LUTs.
 Optical sharpening, noise, grain, CA, softness and vignette are residual profiles:
 they account for the rendering already present in the P43 JPEG.
 
+The generated LUTs also neutralize unintended color on each inherited base
+LUT's neutral axis. Warm subjects receive a luminance-preserving hue correction
+before the final contrast stage: it restores the green component that the
+legacy disposable LUT suppressed, preventing P43 skin, hair and wood from
+collapsing toward magenta-red. On the indoor P43 calibration frame, the five
+disposable-film looks keep red-versus-green separation within 14% of the clean
+camera render while retaining their individual warm-film character.
+
 ## Reference manifest
 
 | Family | Exact target | Status | Reference quality | Primary reference |
