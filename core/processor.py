@@ -978,7 +978,14 @@ class ImageProcessor:
 
         wb   = _kelvin_to_acescg_gain(BASE_KELVIN + a.wb_temp)
         tint = _tint_to_acescg_gain(a.tint)
-        base_ev = 0.0 if self.input_kind == INPUT_RASTER else v.base_exposure_offset_v2
+        # Raster inputs still need the ACEScct level at which the bundled LUTs
+        # were authored.  This is deliberately applied only to the styled path:
+        # the neutral 0% endpoint above remains the untouched, colour-managed
+        # JPEG.  The previous raster=0 shortcut fed every LUT data two stops
+        # too dark and forced the UI to hide the resulting crush at 60%.
+        base_ev = (v.raster_lut_input_offset_ev
+                   if self.input_kind == INPUT_RASTER
+                   else v.base_exposure_offset_v2)
         ev   = float(2.0 ** (a.exposure_ev + base_ev + pre_lut_ev))
         gain = (wb * tint * ev).astype(np.float32)
         if not np.allclose(gain, 1.0):

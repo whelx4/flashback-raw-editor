@@ -36,14 +36,14 @@ struct Preset: Identifiable, Decodable, Hashable {
     var opticalAmounts: (vignette: Double, softness: Double, edgeSoftness: Double,
                          sharpen: Double, bloom: Double, brownCorners: Bool) {
         switch opticalProfile {
-        case "funsaver": return (0.28, 0.35, 0.45, 0.65, 0.05, false)
-        case "quicksnap": return (0.20, 0.30, 0.35, 0.70, 0.04, false)
-        case "rapid_retro": return (0.36, 0.50, 0.60, 0.50, 0.05, false)
-        case "lomo_simple_use": return (0.30, 0.40, 0.50, 0.60, 0.05, false)
-        case "h35": return (0.24, 0.30, 0.60, 0.50, 0.04, false)
-        case "camp_snap_2": return (0.16, 0.10, 0.30, 1.40, 0.02, false)
-        case "paper_shoot_20mp": return (0.36, 0.25, 0.45, 0.60, 0.02, true)
-        case "doncamera_2": return (0.20, 0.25, 0.35, 0.85, 0.04, false)
+        case "funsaver": return (0.10, 0.25, 0.30, 0.18, 0.03, false)
+        case "quicksnap": return (0.08, 0.20, 0.25, 0.15, 0.02, false)
+        case "rapid_retro": return (0.12, 0.35, 0.40, 0.10, 0.03, false)
+        case "lomo_simple_use": return (0.10, 0.30, 0.35, 0.12, 0.03, false)
+        case "h35": return (0.10, 0.25, 0.45, 0.10, 0.02, false)
+        case "camp_snap_2": return (0.05, 0.05, 0.15, 0.20, 0.01, false)
+        case "paper_shoot_20mp": return (0.12, 0.15, 0.30, 0.12, 0.01, true)
+        case "doncamera_2": return (0.07, 0.15, 0.20, 0.15, 0.02, false)
         default: return (0.20, 0.20, 0.0, 0.50, 0.03, false)
         }
     }
@@ -51,13 +51,13 @@ struct Preset: Identifiable, Decodable, Hashable {
     var textureAmounts: (grain: Double, lumaNoise: Double, chromaNoise: Double,
                          jpegQuality: Double) {
         switch textureProfile {
-        case "film_800": return (0.12, 0, 0, 1)
-        case "film_400_visible": return (0.10, 0, 0, 1)
-        case "film_400_fine": return (0.085, 0, 0, 1)
-        case "film_200_half": return (0.09, 0, 0, 1)
-        case "camp_snap_2": return (0, 0.014, 0.0045, 0.91)
-        case "paper_shoot": return (0, 0.011, 0.005, 0.87)
-        case "doncamera_2": return (0, 0.020, 0.012, 0.72)
+        case "film_800": return (0.040, 0, 0, 1)
+        case "film_400_visible": return (0.034, 0, 0, 1)
+        case "film_400_fine": return (0.028, 0, 0, 1)
+        case "film_200_half": return (0.024, 0, 0, 1)
+        case "camp_snap_2": return (0, 0.005, 0.002, 0.95)
+        case "paper_shoot": return (0, 0.004, 0.002, 0.93)
+        case "doncamera_2": return (0, 0.007, 0.0035, 0.88)
         default: return (0.08, 0, 0, 1)
         }
     }

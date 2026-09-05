@@ -18,7 +18,9 @@ def test_researched_presets_compose_reusable_profiles():
     paper = vibe_config_for('paper_original')
     camp = vibe_config_for('cs2_standard')
     assert PRESET_RECIPES['funsaver_800'] == ('funsaver_800', 'funsaver', 'film_800')
-    assert fun.ca_pixels == 3.5 and fun.grain_strength_pct == 110.0
+    assert fun.ca_pixels == 2.2 and fun.grain_strength_pct == 40.0
+    assert fun.sharpen_strength_pct == 18.0
+    assert fun.raster_lut_input_offset_ev == 1.63
     assert paper.vignette_tint_r > paper.vignette_tint_g > paper.vignette_tint_b
     assert camp.enable_digital_noise and not camp.enable_grain
 
@@ -127,6 +129,7 @@ def test_default_vibeconfig_is_factory():
     assert cfg.grain_strength_pct == GRAIN_STRENGTH_PCT
     assert cfg.bloom_threshold_stops == BLOOM_THRESHOLD_STOPS
     assert cfg.base_exposure_offset_v2 == BASE_EXPOSURE_OFFSET_V2
+    assert cfg.raster_lut_input_offset_ev == BASE_EXPOSURE_OFFSET_V2
 
 
 # =============================================================================
@@ -146,7 +149,7 @@ def test_image_adjustments_default_has_all_fields():
     assert a.wb_temp == 0.0
     assert a.tint == 0.0
     assert a.push_pull_ev == 0.0
-    assert a.filter_intensity == 0.60
+    assert a.filter_intensity == 1.0
     assert a.rotation == 0
     assert a.active_vibe_id == ''
 

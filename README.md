@@ -21,8 +21,9 @@ folder. It provides:
 - Metadata-preserving JPEG export and persistent open/export folders.
 - Compatibility import for common finished images and camera RAW files.
 
-P43 photographs start at **60% intensity** because they already contain a finished in-camera look.
-The slider still spans 0–100%; 0% is the untouched colour-managed source.
+P43 presets are calibrated so **100% is the intended endpoint**, not an over-strong recipe hidden
+behind a lower default. The slider spans 0–100%; 0% is the untouched colour-managed source and
+lower values are optional creative variations.
 
 Run it from source by double-clicking `START_WINDOWS.bat` or launch:
 

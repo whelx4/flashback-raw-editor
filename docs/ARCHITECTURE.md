@@ -19,8 +19,8 @@ ICC or sRGB decode → linear working image → selected preset/effects
 ```
 
 `shared/presets.json` defines presentation order, names, LUT resources, categories, export suffixes,
-and the 60% product default. The full look is deliberately stronger than the default so the intensity
-control remains useful for both subtle and stylised output.
+and the 100% product default. Each full-strength endpoint is calibrated for P43 JPEG input; the
+intensity control is an optional fade toward the untouched source.
 
 ## Windows
 
@@ -57,8 +57,9 @@ Finished P43 JPEG values are decoded as sRGB unless an embedded ICC profile says
 render bypasses all preset effects. The selected preset is rendered separately and mixed with neutral
 in linear light. Consequently 0% is a trustworthy Before image rather than a weak version of a LUT.
 
-P43 files start at 60% because their colour, contrast, sharpening, white balance, and compression are
-already baked in. This prevents disposable-film and toy-digital recipes from stacking too aggressively.
+P43 files start at 100%. Each color profile owns a measured P43-to-LUT exposure anchor, while its
+optical and texture profiles add only the residual character not already baked into the camera JPEG.
+This avoids stacking Sony sharpening/noise and avoids using global opacity to conceal a bad endpoint.
 
 ## Metadata
 

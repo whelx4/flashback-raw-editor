@@ -7,7 +7,7 @@ This audit records authoritative evidence for the Sony P43 Windows + iPhone/iPad
 | Sony DSC-P43 is the reference input | `shared/presets.json`; EXIF detector and real-roll render | verified |
 | Windows remains the primary editor | P43 folder button, batch UI, ACEScg/GPU engine, packaged EXE | verified |
 | No connected-Flashback/DNG product flow | Windows toolbar/menu/export surface; Apple import surface | verified |
-| Filters are gentler on finished P43 JPEGs | 60% persisted default on Windows and Apple; 0–100% slider remains | verified |
+| 100% is a calibrated P43 endpoint | per-look LUT anchors plus residual optics/texture; 0–100% slider remains | verified |
 | 0% is the source baseline | raster endpoint tests and Before render path | verified |
 | P43 EXIF survives JPEG export | automated EXIF test and real `DSC00007.JPG` export | verified |
 | Whole-folder and individual-file input | Windows file/folder flows and persistence tests | verified |
@@ -23,9 +23,9 @@ This audit records authoritative evidence for the Sony P43 Windows + iPhone/iPad
 - Every Swift file parses without syntax errors using the Swift tree-sitter grammar.
 - GitHub's macOS runner compiles and packages the universal arm64 app successfully.
 - The packaged IPA contains device families 1 and 2, iOS 17.0 minimum metadata, the P43 catalog,
-  all 20 presets, and the 60% default intensity.
+  all 20 presets, and the 100% default intensity.
 - All 20 public preset LUTs and all 20 iOS companion LUTs are present.
-- A real Sony P43 JPEG renders at 2304×1728 with the 60% default.
+- Real P43 roll auditing verifies all 20 full-strength looks without highlight or shadow crush.
 - Its exported EXIF retains `SONY`, `DSC-P43`, and the original capture timestamp.
 - The redesigned source window launches offscreen and exposes P43 folder/JPEG export controls.
 - The new packaged Windows EXE stays running in an offscreen launch smoke test and contains the

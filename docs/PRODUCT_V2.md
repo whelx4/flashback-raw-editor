@@ -5,7 +5,7 @@
 - The Sony Cyber-shot DSC-P43 JPEG is the reference input.
 - An imported photo keeps the camera's baked colour and texture as its 0% baseline.
 - Every photo owns a preset and Filter Intensity value.
-- New P43 imports start at 60%; 100% remains available as an intentional strong look.
+- New P43 imports start at 100%, the calibrated intended endpoint for each look.
 - Originals are copied into the Apple app sandbox and never modified. The Windows app leaves
   originals in place.
 - Removing a photo from an editing batch never deletes the source file.
@@ -15,7 +15,8 @@
 
 The PySide application is the reference editor. It accepts a whole P43 folder, detects the camera
 from EXIF `Make=SONY` and `Model=DSC-P43`, converts the finished sRGB/ICC-managed JPEG into ACEScg,
-applies the selected recipe, and blends the result with the untouched baseline in linear light.
+applies a per-look P43 LUT-input anchor and residual optical/texture recipe, and blends the result
+with the untouched baseline in linear light.
 
 The visible editor contains a preset browser, one intensity slider, before/after comparison,
 thumbnail batch selection, persistent input/output folders, and JPEG export. Generic raster and RAW
