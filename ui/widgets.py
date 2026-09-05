@@ -22,10 +22,11 @@ log = logging.getLogger(__name__)
 from PySide6.QtWidgets import (
     QWidget, QLabel, QScrollArea, QFrame, QVBoxLayout, QHBoxLayout,
     QApplication, QSizePolicy, QToolTip, QGraphicsOpacityEffect,
+    QLineEdit,
 )
 from PySide6.QtCore import (
     Qt, QTimer, QSize, Signal, QThread, QEvent, QPropertyAnimation, QEasingCurve,
-    QPoint, QPointF,
+    QPoint, QPointF, QRect,
 )
 from PySide6.QtGui import (
     QPixmap, QImage, QPainter, QColor, QPen, QCursor, QLinearGradient,
@@ -34,17 +35,14 @@ from PySide6.QtGui import (
 
 from core import resource_path
 from core.gpu import gpu
-from core.processor import FlashbackProcessor
+from core.processor import ImageProcessor, input_kind_for_path
 from core.config import _timing_print
-from core.v1_negative import is_v1_negative
 from ui.theme import C, qcolor, register_theme_listener, ui_font, UI_FONT
+from core.preset_catalog import picker_items, picker_rows
 
 
 def _choose_lut(file_path, lut, lut_v1):
-    """Per-file LUT: V1 negatives use the V1 variant when one was supplied;
-    everything else uses the base LUT."""
-    if lut_v1 is not None and is_v1_negative(str(file_path)):
-        return lut_v1
+    """Compatibility signature; ONE35 V2 always uses the selected base LUT."""
     return lut
 
 
@@ -65,12 +63,11 @@ class ThumbnailWorker(QThread):
     error = Signal(int, str)               # index, error_message
 
     def __init__(self, image_files, processor_lut, export_sources=None,
-                 rotations=None, lut_v1=None):
+                 rotations=None, lut_v1=None, render_profiles=None):
         super().__init__()
         self.image_files = image_files
         self.processor_lut = processor_lut
-        # V1-variant LUT (e.g. disposable_V1). When set, V1 negatives render
-        # with it instead of processor_lut; the base LUT covers everything else.
+        # Kept as a constructor compatibility field for older callers.
         self.lut_v1 = lut_v1
         # Optional dict: target_path_str -> source_path_str. When a target path
         # appears here AND does not yet exist on disk, the worker exports the
@@ -81,12 +78,16 @@ class ThumbnailWorker(QThread):
         # thumbnail is generated from the rotated intermediate so project
         # reloads show oriented thumbs.
         self.rotations = rotations or {}
+        # path -> (VibeConfig, LUT, adjustment dict), used when reopening a
+        # roll whose frames have different presets.
+        self.render_profiles = render_profiles or {}
         self._is_running = True
 
     def run(self):
         """Generate thumbnails in background."""
-        processor = FlashbackProcessor(None)
+        processor = ImageProcessor(None)
         processor.lut = self.processor_lut
+        default_vibe = processor.vibe
         # This worker renders on its own thread, so the GPU LUT it uploads is
         # private to it (thread-local) — it can swap per file without racing the
         # main preview. Tracked so a homogeneous roll only uploads once.
@@ -101,7 +102,14 @@ class ThumbnailWorker(QThread):
 
             file_path_str = str(self.image_files[i])
 
-            chosen = _choose_lut(file_path_str, self.processor_lut, self.lut_v1)
+            profile = self.render_profiles.get(file_path_str)
+            if profile is not None:
+                processor.vibe, chosen, settings = profile
+                processor.set_settings(settings)
+            else:
+                processor.vibe = default_vibe
+                processor.set_settings({})
+                chosen = _choose_lut(file_path_str, self.processor_lut, self.lut_v1)
             if chosen is not uploaded:
                 if chosen is not None:
                     gpu.upload_lut(chosen.table)
@@ -190,6 +198,9 @@ class RenderWorker(QThread):
 
     def request(self, downscale: bool):
         with self._lock:
+            # Any older in-flight result no longer represents the latest slider
+            # state. Let its computation finish, but never repaint the UI with it.
+            self._epoch += 1
             self._pending = downscale
             self._lock.notify()
 
@@ -219,7 +230,7 @@ class RenderWorker(QThread):
                 start_epoch = self._epoch
 
             # The LUT buffer is thread-local, so this worker must mirror the
-            # processor's active LUT (set on the main thread, already V1-resolved)
+            # processor's active LUT (set on the main thread)
             # into its own GPU state before rendering. Re-upload only on change.
             lut = self._processor.lut
             if lut is not self._uploaded_lut:
@@ -263,17 +274,17 @@ class VibeRefreshWorker(QThread):
         self.image_settings = image_settings      # {path_str: settings_dict}
         self.current_index = current_index
         self.lut = lut
-        self.lut_v1 = lut_v1                       # V1-variant LUT (see ThumbnailWorker)
+        self.lut_v1 = lut_v1                       # compatibility field
         self.grain_tiles = grain_tiles
         self.default_settings = default_settings
         self.vibe = vibe                          # snapshot of the active VibeConfig
         self._is_running = True
 
     def run(self):
-        processor = FlashbackProcessor(vibe=self.vibe)
+        processor = ImageProcessor(vibe=self.vibe)
         processor.lut = self.lut
         processor.grain_tiles = self.grain_tiles
-        # Thread-local GPU LUT: swap per file (V1 negatives get the V1 variant).
+        # Thread-local GPU LUT: swap per file.
         uploaded = object()
 
         for idx, path in enumerate(self.image_files):
@@ -295,6 +306,7 @@ class VibeRefreshWorker(QThread):
             try:
                 processor.intermediate_acescg = cached.copy()
                 processor.current_file = file_path
+                processor.input_kind = input_kind_for_path(file_path, False)
                 processor.set_settings(settings)
                 img_display = processor._render_fast(downscale=True)
                 if img_display is not None:
@@ -342,6 +354,9 @@ class ThumbnailWidget(QFrame):
         self.pixmap = None
         self._drag_start_pos = None
         self._drag_active = False
+        self._hovered = False
+        self._delete_hovered = False
+        self._delete_press_active = False
         self.setFixedSize(int(self.THUMBNAIL_HEIGHT * 1.5), self.THUMBNAIL_HEIGHT)
         self.setFrameStyle(QFrame.NoFrame)
         self.setCursor(Qt.PointingHandCursor)
@@ -351,6 +366,8 @@ class ThumbnailWidget(QFrame):
         register_theme_listener(self.update)
 
     def enterEvent(self, event):
+        self._hovered = True
+        self.update()
         if self.toolTip():
             self._tooltip_timer = QTimer(self)
             self._tooltip_timer.setSingleShot(True)
@@ -361,6 +378,11 @@ class ThumbnailWidget(QFrame):
         super().enterEvent(event)
 
     def leaveEvent(self, event):
+        self._hovered = False
+        self._delete_hovered = False
+        self._delete_press_active = False
+        self.setCursor(Qt.PointingHandCursor)
+        self.update()
         if hasattr(self, '_tooltip_timer'):
             self._tooltip_timer.stop()
         QToolTip.hideText()
@@ -390,6 +412,10 @@ class ThumbnailWidget(QFrame):
     def set_processed(self, processed: bool):
         self.is_processed = processed
         self.update()
+
+    def _delete_rect(self) -> QRect:
+        """Generous hover/click target kept inside the thumbnail corner."""
+        return QRect(max(3, self.width() - 27), 4, 23, 23)
 
     def paintEvent(self, event):
         """Custom paint: thumbnail + index label + processed/paste markers + selection ring."""
@@ -459,8 +485,34 @@ class ThumbnailWidget(QFrame):
             painter.setBrush(Qt.NoBrush)
             painter.drawRoundedRect(0, 0, self.width() - 1, self.height() - 1, radius, radius)
 
+        # Hover-only remove control. This removes the frame from the open roll;
+        # the editor's remove_from_project path never deletes the source file.
+        if self._hovered:
+            delete_rect = self._delete_rect()
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(20, 18, 16, 225 if self._delete_hovered else 190))
+            painter.drawRoundedRect(delete_rect, 6, 6)
+
+            icon = delete_rect.adjusted(6, 5, -6, -5)
+            pen = QPen(QColor(255, 255, 255, 235))
+            pen.setWidthF(1.5)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            painter.setPen(pen)
+            painter.setBrush(Qt.NoBrush)
+            # Small trash can: lid, handle, and body.
+            painter.drawLine(icon.left(), icon.top() + 3, icon.right(), icon.top() + 3)
+            painter.drawLine(icon.center().x() - 3, icon.top(), icon.center().x() + 3, icon.top())
+            painter.drawRoundedRect(
+                QRect(icon.left() + 2, icon.top() + 5, icon.width() - 3, icon.height() - 5),
+                1, 1,
+            )
+
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
+            if self._hovered and self._delete_rect().contains(event.pos()):
+                self._delete_press_active = True
+                event.accept()
+                return
             self._drag_start_pos = event.pos()
             self._drag_active = False
             self.clicked.emit(self.index)
@@ -472,6 +524,19 @@ class ThumbnailWidget(QFrame):
             event.ignore()
 
     def mouseMoveEvent(self, event):
+        over_delete = self._hovered and self._delete_rect().contains(event.pos())
+        if over_delete != self._delete_hovered:
+            self._delete_hovered = over_delete
+            if over_delete:
+                if hasattr(self, '_tooltip_timer'):
+                    self._tooltip_timer.stop()
+                QToolTip.hideText()
+            self.update()
+        self.setCursor(Qt.PointingHandCursor)
+
+        if self._delete_press_active:
+            event.accept()
+            return
         if (event.buttons() & Qt.LeftButton) and self._drag_start_pos is not None:
             delta = event.pos() - self._drag_start_pos
             if not self._drag_active and (
@@ -485,6 +550,13 @@ class ThumbnailWidget(QFrame):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton and self._delete_press_active:
+            should_remove = self._delete_rect().contains(event.pos())
+            self._delete_press_active = False
+            if should_remove:
+                self.remove_requested.emit(self.index)
+            event.accept()
+            return
         if event.button() == Qt.LeftButton and self._drag_active:
             self.unsetCursor()
             window = self.window()
@@ -1000,7 +1072,7 @@ class RoundedLabel(QLabel):
         path = QPainterPath()
         path.addRoundedRect(0, 0, self.width(), self.height(), self._radius, self._radius)
         painter.setClipPath(path)
-        painter.fillRect(self.rect(), qcolor("bg_window"))
+        painter.fillRect(self.rect(), qcolor("bg_canvas"))
 
         if self._pixmap:
             x = (self.width() - self._pixmap.width()) // 2
@@ -1018,14 +1090,16 @@ class ZoomableImageWidget(QScrollArea):
     """
     Custom zoomable image viewer with pan support.
 
-    - Left click: zoom to 125% (or pan if already zoomed)
+    - Hold left click: compare the calibrated image before the preset
     - Scroll: zoom in/out through fixed steps
-    - Mouse drag: pan when zoomed in
+    - Middle drag: pan when zoomed in
     - Double click: fit to window
     """
 
     ZOOM_LEVELS = [0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0, 4.0]
     ZOOM_FACTOR = 1.18  # multiplicative step per scroll tick
+    compare_pressed = Signal()
+    compare_released = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1036,6 +1110,7 @@ class ZoomableImageWidget(QScrollArea):
         self._fit_to_window = True
         self._panning = False
         self._last_mouse_pos = None
+        self._comparing = False
 
         self._zoom_cursor = self._create_zoom_cursor()
 
@@ -1049,7 +1124,7 @@ class ZoomableImageWidget(QScrollArea):
         self.image_label = RoundedLabel(radius=2)
         self.image_label.setMouseTracking(True)
 
-        self.placeholder_label = QLabel("Drag & drop DNG files here\nor use the Folder icon")
+        self.placeholder_label = QLabel("Drag & drop Sony P43 JPEGs here\nor open a camera folder")
         self.placeholder_label.setAlignment(Qt.AlignCenter)
         self._apply_viewer_theme()
         self.setWidget(self.placeholder_label)
@@ -1059,7 +1134,7 @@ class ZoomableImageWidget(QScrollArea):
 
     def _apply_viewer_theme(self):
         from ui.theme import C
-        bg = C['bg_window']
+        bg = C['bg_canvas']
         self.setStyleSheet(
             f"QScrollArea {{ border: none; background-color: {bg}; border-radius: 2px; }}"
             f"QScrollArea > QWidget {{ background-color: {bg}; }}"
@@ -1068,7 +1143,7 @@ class ZoomableImageWidget(QScrollArea):
         vp = self.viewport()
         if vp is not None:
             pal = vp.palette()
-            pal.setColor(vp.backgroundRole(), qcolor("bg_window"))
+            pal.setColor(vp.backgroundRole(), qcolor("bg_canvas"))
             vp.setPalette(pal)
             vp.setAutoFillBackground(True)
         if hasattr(self, "placeholder_label"):
@@ -1178,7 +1253,7 @@ class ZoomableImageWidget(QScrollArea):
         try:
             _ = self.placeholder_label.text()  # touches the Qt object
         except (RuntimeError, AttributeError):
-            self.placeholder_label = QLabel("Drag & drop DNG files here\nor use the Folder icon")
+            self.placeholder_label = QLabel("Drag & drop Sony P43 JPEGs here\nor open a camera folder")
             self.placeholder_label.setAlignment(Qt.AlignCenter)
             self._apply_viewer_theme()
         self.setWidget(self.placeholder_label)
@@ -1258,20 +1333,40 @@ class ZoomableImageWidget(QScrollArea):
         if self._zoom_level > fit_zoom * 1.3:
             self.image_label.setCursor(Qt.OpenHandCursor)
         else:
-            self.image_label.setCursor(self._zoom_cursor)
+            self.image_label.setCursor(Qt.PointingHandCursor)
+
+    def show_compare_image(self, img_array):
+        """Temporarily paint a comparison frame without replacing the edit."""
+        if img_array is None or self._original_pixmap is None:
+            return
+        img_8bit = (np.clip(img_array, 0, 1) * 255).astype(np.uint8)
+        h, w, c = img_8bit.shape
+        q_image = QImage(img_8bit.data, w, h, c * w, QImage.Format_RGB888)
+        pixmap = QPixmap.fromImage(q_image).scaled(
+            self.image_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation
+        )
+        self.image_label.setPixmap(pixmap)
+
+    def end_compare(self):
+        """Restore the current edited image after a hold-to-compare gesture."""
+        if self._original_pixmap is not None:
+            self._update_display()
 
     def mousePressEvent(self, event):
         if self._original_pixmap is None:
             return
 
         if event.button() == Qt.LeftButton:
-            fit_zoom = self._get_fit_zoom()
-            if self._zoom_level > fit_zoom * 1.3:
-                self._panning = True
-                self._last_mouse_pos = event.pos()
-                self.image_label.setCursor(Qt.ClosedHandCursor)
-            else:
-                self._set_zoom_at(1.25, event.pos())
+            self._comparing = True
+            self.compare_pressed.emit()
+            event.accept()
+            return
+        if event.button() == Qt.MiddleButton and self._zoom_level > self._get_fit_zoom() * 1.3:
+            self._panning = True
+            self._last_mouse_pos = event.pos()
+            self.image_label.setCursor(Qt.ClosedHandCursor)
+            event.accept()
+            return
 
         super().mousePressEvent(event)
 
@@ -1287,9 +1382,16 @@ class ZoomableImageWidget(QScrollArea):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
-        if event.button() == Qt.LeftButton and self._panning:
+        if event.button() == Qt.LeftButton and self._comparing:
+            self._comparing = False
+            self.compare_released.emit()
+            event.accept()
+            return
+        if event.button() == Qt.MiddleButton and self._panning:
             self._panning = False
             self._update_cursor()
+            event.accept()
+            return
 
         super().mouseReleaseEvent(event)
 
@@ -1331,33 +1433,30 @@ class ZoomableImageWidget(QScrollArea):
 # =============================================================================
 
 class VibePicker(QWidget):
-    """Film-character preset selector — styled dropdown matching the HTML design."""
+    """Compact selector backed by a searchable, categorized preset browser."""
 
     vibe_changed = Signal(str)
 
-    VIBES = [
-        ('disposable',           'Disposable',          "So bad it's good",           '1'),
-        ('point_shoot',          'Point & Shoot',       '90s photoalbum vibes',        '2'),
-        ('rangefinder',          'Rangefinder',         'Like-a M6',                   '3'),
-        ('monochrome',           'Monochrome',          'makes everything art',         '4'),
-        ('flashback_classic_v1', 'Flashback Classic V1','Recreation of Flashback Classic V1', '5'),
-    ]
+    VIBES = picker_rows()
+    ITEMS = picker_items()
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._current = 'disposable'
+        self._current = 'funsaver_800'
+        self._popup = None
         self._setup_ui()
         register_theme_listener(self._apply_theme)
 
     def current_vibe(self):
         return self._current
 
-    def set_vibe(self, vibe_id: str):
+    def set_vibe(self, vibe_id: str, emit: bool = True):
         if vibe_id == self._current or not any(v[0] == vibe_id for v in self.VIBES):
             return
         self._current = vibe_id
         self._update_display()
-        self.vibe_changed.emit(vibe_id)
+        if emit:
+            self.vibe_changed.emit(vibe_id)
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -1369,8 +1468,8 @@ class VibePicker(QWidget):
         self._selector.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
 
         sel_layout = QHBoxLayout(self._selector)
-        sel_layout.setContentsMargins(10, 8, 10, 8)
-        sel_layout.setSpacing(8)
+        sel_layout.setContentsMargins(12, 10, 10, 10)
+        sel_layout.setSpacing(10)
 
         text_col = QWidget()
         text_col.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
@@ -1383,10 +1482,13 @@ class VibePicker(QWidget):
         text_v.addWidget(self._name_lbl)
         text_v.addWidget(self._sub_lbl)
 
+        self._status_lbl = QLabel()
+        self._status_lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self._chevron = QLabel("›")
         self._chevron.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
 
         sel_layout.addWidget(text_col, 1)
+        sel_layout.addWidget(self._status_lbl)
         sel_layout.addWidget(self._chevron)
 
         layout.addWidget(self._selector)
@@ -1396,47 +1498,141 @@ class VibePicker(QWidget):
         self._apply_theme()
 
     def _update_display(self):
-        vibe = next(v for v in self.VIBES if v[0] == self._current)
-        self._name_lbl.setText(vibe[1])
-        self._sub_lbl.setText(vibe[2])
+        vibe = next(v for v in self.ITEMS if v["id"] == self._current)
+        self._name_lbl.setText(vibe["displayName"])
+        secondary = (
+            vibe["subtitle"]
+            if vibe["status"] == "legacy"
+            else f'{vibe["category"]} · Inspired'
+        )
+        self._sub_lbl.setText(secondary)
+        self._status_lbl.setText(vibe["status"].upper())
+        self._selector.setToolTip(f'{vibe["name"]}\n{vibe["subtitle"]}')
+        self._apply_theme()
 
     def _apply_theme(self):
         self._selector.setStyleSheet(
-            f"QFrame {{ background: {C['bg_input']}; border: 1px solid {C['border_input']}; border-radius: 4px; }}"
-            f"QFrame:hover {{ border-color: {C['border_active']}; }}"
+            f"QFrame {{ background: {C['bg_input']}; border: 1px solid {C['border_input']}; border-radius: 7px; }}"
+            f"QFrame:hover {{ background: {C['bg_input_hover']}; border-color: {C['border_active']}; }}"
         )
-        self._name_lbl.setFont(ui_font(12, QFont.Weight.Medium))
+        self._selector.setMinimumHeight(68)
+        self._name_lbl.setFont(ui_font(12, QFont.Weight.DemiBold))
         self._name_lbl.setStyleSheet(f"color: {C['text_primary']}; background: transparent; border: none;")
-        self._sub_lbl.setFont(ui_font(10, QFont.Weight.Normal))
+        self._sub_lbl.setFont(ui_font(9, QFont.Weight.Normal))
         self._sub_lbl.setStyleSheet(f"color: {C['text_dim']}; background: transparent; border: none;")
+        self._status_lbl.setFont(ui_font(7, QFont.Weight.DemiBold))
+        self._status_lbl.setStyleSheet(
+            f"color: {C['accent']}; background: {C['accent_soft']}; border: none;"
+            "border-radius: 4px; padding: 3px 5px; letter-spacing: 0.5px;"
+        )
         self._chevron.setFont(ui_font(16, QFont.Weight.Normal))
         self._chevron.setStyleSheet(f"color: {C['text_dim']}; background: transparent; border: none;")
 
     def _show_popup(self):
+        if self._popup is not None:
+            self._popup.close()
+
         popup = QFrame(None, Qt.WindowType.Popup)
+        self._popup = popup
         popup.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        popup.setObjectName("VibePopup")
         popup.setStyleSheet(
             f"QFrame#VibePopup {{ background: {C['bg_rail']}; border: 1px solid {C['border_input']};"
-            f"  border-radius: 4px; }}"
+            f"  border-radius: 8px; }}"
         )
-        popup.setObjectName("VibePopup")
 
         pop_layout = QVBoxLayout(popup)
-        pop_layout.setContentsMargins(0, 4, 0, 4)
-        pop_layout.setSpacing(0)
+        pop_layout.setContentsMargins(10, 10, 10, 8)
+        pop_layout.setSpacing(8)
 
-        for vibe_id, name, sub, shortcut in self.VIBES:
+        title_row = QHBoxLayout()
+        title_row.setContentsMargins(2, 0, 2, 0)
+        title = QLabel("CHOOSE A CAMERA LOOK")
+        title.setFont(ui_font(9, QFont.Weight.DemiBold))
+        title.setStyleSheet(
+            f"color: {C['text_label']}; background: transparent; border: none; letter-spacing: 1px;"
+        )
+        count = QLabel(f"{len(self.ITEMS)} PRESETS")
+        count.setFont(ui_font(8, QFont.Weight.Medium))
+        count.setStyleSheet(f"color: {C['text_dim']}; background: transparent; border: none;")
+        title_row.addWidget(title)
+        title_row.addStretch(1)
+        title_row.addWidget(count)
+        pop_layout.addLayout(title_row)
+
+        search = QLineEdit()
+        search.setPlaceholderText("Search presets or camera families…")
+        search.setClearButtonEnabled(True)
+        search.setFont(ui_font(10, QFont.Weight.Normal))
+        search.setStyleSheet(
+            f"QLineEdit {{ color: {C['text_primary']}; background: {C['bg_input']};"
+            f" border: 1px solid {C['border_input']}; border-radius: 6px; padding: 7px 9px; }}"
+            f"QLineEdit:focus {{ border-color: {C['accent']}; background: {C['bg_input_hover']}; }}"
+        )
+        pop_layout.addWidget(search)
+
+        scroll = QScrollArea()
+        scroll.setObjectName("PresetScroll")
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setStyleSheet(
+            f"QScrollArea#PresetScroll, QScrollArea#PresetScroll > QWidget > QWidget {{"
+            f" background: {C['bg_rail']}; border: none; }}"
+            f"QScrollBar:vertical {{ background: transparent; width: 7px; margin: 2px 0; }}"
+            f"QScrollBar::handle:vertical {{ background: {C['border_active']}; min-height: 30px; border-radius: 3px; }}"
+            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"
+        )
+        content = QWidget()
+        content.setObjectName("PresetContent")
+        content.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        content.setStyleSheet(f"QWidget#PresetContent {{ background: {C['bg_rail']}; border: none; }}")
+        list_layout = QVBoxLayout(content)
+        list_layout.setContentsMargins(0, 0, 3, 0)
+        list_layout.setSpacing(2)
+        scroll.setWidget(content)
+        pop_layout.addWidget(scroll)
+
+        grouped_rows = []
+        current_category = None
+        category_header = None
+        category_rows = []
+
+        for vibe in self.ITEMS:
+            vibe_id = vibe["id"]
+            name = vibe["displayName"]
+            sub = vibe["subtitle"]
+            shortcut = vibe["shortcut"]
+            if vibe["category"] != current_category:
+                if category_header is not None:
+                    grouped_rows.append((category_header, category_rows))
+                current_category = vibe["category"]
+                category_rows = []
+                category_header = QLabel(current_category.upper())
+                category_header.setFont(ui_font(8, QFont.Weight.DemiBold))
+                category_header.setStyleSheet(
+                    f"color: {C['text_label']}; background: transparent; border: none;"
+                    "padding: 10px 7px 4px 7px; letter-spacing: 1px;"
+                )
+                list_layout.addWidget(category_header)
+
             row = QFrame()
             row.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
             row.setCursor(Qt.CursorShape.PointingHandCursor)
             is_selected = vibe_id == self._current
-            row.setStyleSheet(
-                f"QFrame {{ background: {C['bg_input_active'] if is_selected else 'transparent'}; border: none; }}"
-            )
+            row.setObjectName("PresetRow")
+
+            def style_row(target, selected=False, hovered=False):
+                background = C['bg_input_active'] if selected else (C['bg_input_hover'] if hovered else 'transparent')
+                target.setStyleSheet(
+                    f"QFrame#PresetRow {{ background: {background}; border: none; border-radius: 6px; }}"
+                )
+
+            style_row(row, selected=is_selected)
 
             row_layout = QHBoxLayout(row)
-            row_layout.setContentsMargins(10, 8, 10, 8)
-            row_layout.setSpacing(8)
+            row_layout.setContentsMargins(8, 8, 8, 8)
+            row_layout.setSpacing(9)
 
             check_lbl = QLabel("✓" if is_selected else "")
             check_lbl.setFixedWidth(14)
@@ -1450,28 +1646,36 @@ class VibePicker(QWidget):
             text_v.setSpacing(2)
 
             name_lbl = QLabel(name)
-            name_lbl.setFont(ui_font(12, QFont.Weight.Medium))
+            name_lbl.setFont(ui_font(11, QFont.Weight.DemiBold if is_selected else QFont.Weight.Medium))
             name_lbl.setStyleSheet(f"color: {C['text_primary']}; background: transparent; border: none;")
             sub_lbl = QLabel(sub)
-            sub_lbl.setFont(ui_font(10, QFont.Weight.Normal))
+            sub_lbl.setFont(ui_font(9, QFont.Weight.Normal))
             sub_lbl.setStyleSheet(f"color: {C['text_dim']}; background: transparent; border: none;")
 
             text_v.addWidget(name_lbl)
             text_v.addWidget(sub_lbl)
 
-            shortcut_lbl = QLabel(shortcut)
-            shortcut_lbl.setFixedWidth(18)
-            shortcut_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            shortcut_lbl.setFont(ui_font(10, QFont.Weight.Medium))
-            shortcut_lbl.setStyleSheet(
-                f"color: {C['text_dim']}; background: {C['bg_input']};"
-                f" border: 1px solid {C['border_input']}; border-radius: 3px;"
-                f" padding: 1px 0;"
+            status_lbl = QLabel(vibe["status"].upper())
+            status_lbl.setFont(ui_font(7, QFont.Weight.DemiBold))
+            status_lbl.setStyleSheet(
+                f"color: {C['accent'] if vibe['status'] != 'legacy' else C['text_dim']};"
+                f" background: {C['accent_soft'] if vibe['status'] != 'legacy' else C['bg_input']};"
+                " border: none; border-radius: 4px; padding: 3px 5px; letter-spacing: 0.4px;"
             )
+            status_lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+
+            shortcut_lbl = QLabel(shortcut)
+            shortcut_lbl.setFixedWidth(18 if shortcut else 0)
+            shortcut_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            shortcut_lbl.setFont(ui_font(9, QFont.Weight.Medium))
+            shortcut_lbl.setStyleSheet(f"color: {C['text_dim']}; background: transparent; border: none;")
+            shortcut_lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
 
             row_layout.addWidget(check_lbl)
             row_layout.addWidget(text_col, 1)
+            row_layout.addWidget(status_lbl)
             row_layout.addWidget(shortcut_lbl)
+            row.setToolTip(vibe["name"])
 
             def make_handler(vid, p, r):
                 def on_press(event):
@@ -1481,10 +1685,10 @@ class VibePicker(QWidget):
                     self.vibe_changed.emit(vid)
                 def on_enter(event):
                     if vid != self._current:
-                        r.setStyleSheet(f"QFrame {{ background: {C['bg_input_hover']}; border: none; }}")
+                        style_row(r, hovered=True)
                 def on_leave(event):
                     if vid != self._current:
-                        r.setStyleSheet("QFrame { background: transparent; border: none; }")
+                        style_row(r)
                 return on_press, on_enter, on_leave
 
             press, enter, leave = make_handler(vibe_id, popup, row)
@@ -1492,9 +1696,41 @@ class VibePicker(QWidget):
             row.enterEvent = enter
             row.leaveEvent = leave
 
-            pop_layout.addWidget(row)
+            list_layout.addWidget(row)
+            category_rows.append((row, f'{name} {sub} {vibe["category"]}'.lower()))
 
-        global_pos = self._selector.mapToGlobal(QPoint(0, self._selector.height() + 4))
-        popup.move(global_pos)
-        popup.resize(self._selector.width(), len(self.VIBES) * 56 + 8)
+        if category_header is not None:
+            grouped_rows.append((category_header, category_rows))
+        list_layout.addStretch(1)
+
+        def filter_rows(query):
+            needle = query.strip().lower()
+            for header, rows in grouped_rows:
+                visible = False
+                for row, searchable in rows:
+                    matches = not needle or needle in searchable
+                    row.setVisible(matches)
+                    visible = visible or matches
+                header.setVisible(visible)
+
+        search.textChanged.connect(filter_rows)
+
+        anchor = self._selector.mapToGlobal(QPoint(0, self._selector.height() + 5))
+        screen = QApplication.screenAt(anchor) or self.screen()
+        available = screen.availableGeometry()
+        popup_width = min(440, available.width() - 24)
+        popup_height = min(640, available.height() - 24)
+
+        x = self._selector.mapToGlobal(QPoint(self._selector.width(), 0)).x() - popup_width
+        x = max(available.left() + 12, min(x, available.right() - popup_width - 11))
+        room_below = available.bottom() - anchor.y()
+        if room_below >= popup_height:
+            y = anchor.y()
+        else:
+            selector_top = self._selector.mapToGlobal(QPoint(0, 0)).y()
+            y = max(available.top() + 12, selector_top - popup_height - 5)
+
+        popup.resize(popup_width, popup_height)
+        popup.move(x, y)
         popup.show()
+        search.setFocus(Qt.FocusReason.PopupFocusReason)

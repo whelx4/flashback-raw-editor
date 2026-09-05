@@ -58,9 +58,6 @@ The first render lazily initialises the GPU device (no startup cost). Logs go to
 
 ## Developer affordances
 
-- **`F12`** — toggle the Advanced Settings panel: live controls for every vibe effect parameter,
-  plus the LUT-profiling TIFF export and DNG profile name. This is the tuning surface; the main
-  window stays deliberately minimal.
 - **`LOFILOGIC_DEBUG_TIMING=1`** — print per-stage render timings to stdout. Off by default so user
   installs stay quiet. Example:
   ```bash

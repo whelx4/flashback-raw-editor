@@ -18,6 +18,7 @@ DARK_PALETTE = {
     "bg_toolbar":     "#17161a",
     "bg_rail":        "#1b1a1e",
     "bg_strip":       "#131214",
+    "bg_canvas":      "#101012",
     "bg_input":       "rgba(255, 255, 255, 0.03)",
     "bg_input_hover": "rgba(255, 255, 255, 0.05)",
     "bg_input_active":"rgba(255, 255, 255, 0.08)",
@@ -35,6 +36,8 @@ DARK_PALETTE = {
     "accent_soft":    "rgba(255, 138, 53, 0.15)",
     "processed":      "#6bb56a",
     "paste_marker":   "#ffffff",
+    "text_canvas":    "#f3efe8",
+    "text_canvas_dim":"rgba(243, 239, 232, 0.58)",
 }
 
 LIGHT_PALETTE = {
@@ -42,6 +45,7 @@ LIGHT_PALETTE = {
     "bg_toolbar":      "#e0d6c2",
     "bg_rail":         "#ebe3d3",
     "bg_strip":        "#e0d6c2",
+    "bg_canvas":       "#292722",
     "bg_input":        "rgba(42, 38, 32, 0.04)",
     "bg_input_hover":  "rgba(42, 38, 32, 0.06)",
     "bg_input_active": "rgba(42, 38, 32, 0.10)",
@@ -59,6 +63,8 @@ LIGHT_PALETTE = {
     "accent_soft":     "rgba(208, 138, 74, 0.18)",
     "processed":       "#4d9a4c",
     "paste_marker":    "#2a2620",
+    "text_canvas":     "#f7f2e9",
+    "text_canvas_dim": "rgba(247, 242, 233, 0.58)",
 }
 
 PALETTES = {"light": LIGHT_PALETTE, "dark": DARK_PALETTE}
@@ -241,7 +247,7 @@ def process_btn_qss() -> str:
             background: {C['accent']};
             color: {btn_text};
             border: none;
-            border-radius: 3px;
+            border-radius: 6px;
             font-family: "{UI_FONT}";
             font-size: 12px;
             font-weight: 600;
@@ -269,7 +275,7 @@ def format_pill_qss(active: bool) -> str:
         QPushButton {{
             background: {bg};
             border: 1px solid {border};
-            border-radius: 3px;
+            border-radius: 6px;
             color: {color};
             font-family: "{UI_FONT}";
             font-size: 11px;

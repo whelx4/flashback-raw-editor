@@ -339,6 +339,8 @@ class VibeConfig:
     enable_lut: bool = True
     enable_vignette: bool = True
     enable_bloom: bool = True
+    enable_digital_noise: bool = False
+    enable_jpeg_artifacts: bool = False
 
     # ---- effect parameters (user-facing units; see conversion helpers) ----
     # Percent fields are stored as 0–N where N is each effect's natural max
@@ -367,9 +369,30 @@ class VibeConfig:
     cnr_despike_bias_pct: float = CNR_DESPIKE_BIAS_PCT          # 0 sym … 100 green-only
     vignette_strength_pct: float = VIGNETTE_STRENGTH_PCT        # 0–100
     vignette_color_pct: float = VIGNETTE_COLOR_PCT              # 0–100
+    # Optional absolute RGB edge tint. 1/1/1 is neutral and preserves the
+    # legacy cool-shift control above. Values below 1 absorb that channel at
+    # the edge; this is needed for brown/amber plastic-lens corner casts.
+    vignette_tint_r: float = 1.0
+    vignette_tint_g: float = 1.0
+    vignette_tint_b: float = 1.0
     vignette_curve: float = VIGNETTE_CURVE                      # -100…+100
     bloom_strength_pct: float = BLOOM_STRENGTH_PCT              # 0–100
     bloom_threshold_stops: float = BLOOM_THRESHOLD_STOPS        # EV above mid grey
+
+    # Digital-camera texture. Unlike film grain this is generated as separate
+    # luma/chroma sensor noise and can be followed by a final JPEG simulation.
+    luma_noise_strength_pct: float = 0.0
+    luma_noise_scale: float = 1.0
+    chroma_noise_strength_pct: float = 0.0
+    chroma_noise_scale: float = 2.0
+    chroma_noise_correlation: float = 0.35
+    shadow_noise_bias_pct: float = 50.0
+    jpeg_artifact_strength_pct: float = 0.0
+    jpeg_block_size: int = 8
+    jpeg_chroma_degradation_pct: float = 0.0
+    jpeg_ringing_strength_pct: float = 0.0
+    jpeg_degrade_raster_inputs: bool = False
+    grain_scale: float = 1.0
 
     # ---- reverse-AE (advanced) ----
     enable_reverse_autoexposure: bool = False
@@ -427,18 +450,21 @@ class VibeConfig:
 
 @dataclass
 class ImageAdjustments:
-    """Per-image user adjustments: the four main-window sliders + rotation.
+    """Per-image choices for the preset-first editor.
 
-    Travels with the image and is persisted in projects. active_vibe_id
-    records which vibe the image was last edited under; for now the UI
-    keeps a single global active vibe, but every image stores its own id
-    so future per-image vibes (or project reloading) work without a
-    schema change.
+    ``filter_intensity`` is the only user-facing adjustment.  The legacy
+    exposure/WB/tint/push-pull fields remain readable so existing ``.lofi``
+    projects do not become corrupt, but the streamlined UI no longer exposes
+    them.  New edits leave those values neutral.
     """
     exposure_ev: float = 0.0
     wb_temp: float = 0.0
     tint: float = 0.0
     push_pull_ev: float = 0.0
+    # P43 JPEGs already carry the camera's contrast, sharpening and white
+    # balance. A 60% starting point adds the selected character without
+    # overpowering that baked-in rendering; the UI still exposes 0–100%.
+    filter_intensity: float = 0.60
     rotation: int = 0
     active_vibe_id: str = ''   # filled in by the editor when an image loads
 
@@ -477,38 +503,36 @@ class ImageAdjustments:
 
 FACTORY_LUTS = {
     'disposable':           'assets/luts/disposable.cube',
-    'disposable_v1':        'assets/luts/disposable_V1.cube',
     'flashback_classic_v1': 'assets/luts/V1.cube',
     'point_shoot':          'assets/luts/pointandshoot.cube',
     'rangefinder':          'assets/luts/rangefinder.cube',
     'monochrome':           'assets/luts/monochrome.cube',
+    'funsaver_800':         'assets/luts/funsaver_800.cube',
+    'quicksnap_400':        'assets/luts/quicksnap_400.cube',
+    'rapid_retro_400':      'assets/luts/rapid_retro_400.cube',
+    'lomo_cn400':           'assets/luts/lomo_cn400.cube',
+    'h35_gold_200':         'assets/luts/h35_gold_200.cube',
+    'cs2_standard':         'assets/luts/cs2_standard.cube',
+    'cs2_vintage_1':        'assets/luts/cs2_vintage_1.cube',
+    'cs2_vintage_2':        'assets/luts/cs2_vintage_2.cube',
+    'cs2_vintage_3':        'assets/luts/cs2_vintage_3.cube',
+    'cs2_analog':           'assets/luts/cs2_analog.cube',
+    'cs2_bw':               'assets/luts/cs2_bw.cube',
+    'paper_original':       'assets/luts/paper_original.cube',
+    'paper_bw':             'assets/luts/paper_bw.cube',
+    'paper_blue':           'assets/luts/paper_blue.cube',
+    'paper_sepia':          'assets/luts/paper_sepia.cube',
+    'don_retro':            'assets/luts/don_retro.cube',
+    'don_cool':             'assets/luts/don_cool.cube',
+    'don_warm':             'assets/luts/don_warm.cube',
+    'don_vivid':            'assets/luts/don_vivid.cube',
+    'don_bw':               'assets/luts/don_bw.cube',
 }
 
 # Tag prefixes used on VibeConfig.lut_ref. Keep these as the single source
 # of truth — sites that build or parse refs must use the constants below.
 LUT_REF_FACTORY = 'factory:'
 LUT_REF_USER = 'user:'
-
-# Per-file-type LUT overrides. V1 negatives have a flatter, lower-DR capture
-# than V2 DNGs, so the disposable look needs a LUT tuned for them. The override
-# is transient (display/export only) — it never gets written back into the
-# saved vibe, and it only swaps a *factory* ref, never a user-imported LUT.
-_V1_LUT_OVERRIDES = {
-    LUT_REF_FACTORY + 'disposable': LUT_REF_FACTORY + 'disposable_v1',
-}
-
-
-def effective_lut_ref(base_ref: str, is_v1: bool) -> str:
-    """Resolve the LUT ref actually used to render a frame.
-
-    For V1 negatives, swap in the V1-tuned variant of a factory look where one
-    exists; everything else (V2 files, user LUTs, looks without a V1 variant)
-    passes through unchanged.
-    """
-    if is_v1:
-        return _V1_LUT_OVERRIDES.get(base_ref, base_ref)
-    return base_ref
-
 
 def resolve_lut_ref(ref: str):
     """Resolve a tagged LUT reference to an absolute filesystem path.
@@ -545,13 +569,171 @@ def resolve_lut_ref(ref: str):
 #
 # `ca_zoom_blur_pct` in the presets is legacy/inert — the spectral CA is driven
 # only by ca_pixels (the radial spectral spread subsumes the old zoom-blur pass).
-VIBE_PRESETS = {
-    'disposable':           {'enable_ca': True,  'ca_pixels': 8.0, 'ca_zoom_blur_pct': 150.0, 'softness': 0.5, 'sharpness_pct': 200.0, 'sharpen_radius': 0.5, 'grain_pct': 120.0, 'vignette_pct': 10.0, 'vignette_curve':  66.0, 'bloom_pct': 15.0, 'lut': 'factory:disposable'},
-    'flashback_classic_v1': {'enable_ca': True,  'ca_pixels':  5.0, 'ca_zoom_blur_pct': 200.0, 'softness': 0.3, 'sharpness_pct':  80.0, 'sharpen_radius': 0.5, 'grain_pct': 200.0, 'vignette_pct': 10.0, 'vignette_curve':  66.0, 'bloom_pct':  3.0, 'lut': 'factory:flashback_classic_v1', 'base_exposure_offset_v2': 0.0},
-    'point_shoot':          {'enable_ca': True,  'ca_pixels':  2.0, 'ca_zoom_blur_pct': 100.0, 'softness': 0.3, 'sharpness_pct':  50.0, 'sharpen_radius': 1.0, 'grain_pct':  80.0, 'vignette_pct': 10.0, 'vignette_curve':   0.0, 'bloom_pct': 10.0, 'lut': 'factory:point_shoot'},
-    'rangefinder':          {'enable_ca': False, 'ca_pixels':  0.0, 'ca_zoom_blur_pct': 100.0, 'softness': 0.1, 'sharpness_pct':  80.0, 'sharpen_radius': 1.0, 'grain_pct':  50.0, 'vignette_pct':  5.0, 'vignette_curve':   0.0, 'bloom_pct':  5.0, 'lut': 'factory:rangefinder'},
-    'monochrome':           {'enable_ca': False, 'ca_pixels':  0.0, 'ca_zoom_blur_pct': 100.0, 'softness': 0.1, 'sharpness_pct':  80.0, 'sharpen_radius': 1.0, 'grain_pct': 150.0, 'vignette_pct': 20.0, 'vignette_curve':   0.0, 'bloom_pct':  5.0, 'lut': 'factory:monochrome'},
+# Reusable profile layers. A preset is color x optics x texture, with optional
+# overrides. Keeping these layers separate is what lets an H35 optical profile
+# enlarge the selected film grain without pretending the camera is a film stock.
+COLOR_PROFILES = {
+    'funsaver_800': {'lut_ref': 'factory:funsaver_800'},
+    'quicksnap_400': {'lut_ref': 'factory:quicksnap_400'},
+    'rapid_retro_400': {'lut_ref': 'factory:rapid_retro_400'},
+    'lomo_cn400': {'lut_ref': 'factory:lomo_cn400'},
+    'h35_gold_200': {'lut_ref': 'factory:h35_gold_200'},
+    'cs2_standard': {'lut_ref': 'factory:cs2_standard'},
+    'cs2_vintage_1': {'lut_ref': 'factory:cs2_vintage_1'},
+    'cs2_vintage_2': {'lut_ref': 'factory:cs2_vintage_2'},
+    'cs2_vintage_3': {'lut_ref': 'factory:cs2_vintage_3'},
+    'cs2_analog': {'lut_ref': 'factory:cs2_analog'},
+    'cs2_bw': {'lut_ref': 'factory:cs2_bw'},
+    'paper_original': {'lut_ref': 'factory:paper_original'},
+    'paper_bw': {'lut_ref': 'factory:paper_bw'},
+    'paper_blue': {'lut_ref': 'factory:paper_blue'},
+    'paper_sepia': {'lut_ref': 'factory:paper_sepia'},
+    'don_retro': {'lut_ref': 'factory:don_retro'},
+    'don_cool': {'lut_ref': 'factory:don_cool'},
+    'don_warm': {'lut_ref': 'factory:don_warm'},
+    'don_vivid': {'lut_ref': 'factory:don_vivid'},
+    'don_bw': {'lut_ref': 'factory:don_bw'},
+    # Backward-compatible profiles retained for existing projects.
+    'legacy_disposable': {'lut_ref': 'factory:disposable'},
+    'legacy_point_shoot': {'lut_ref': 'factory:point_shoot'},
+    'legacy_rangefinder': {'lut_ref': 'factory:rangefinder'},
+    'legacy_monochrome': {'lut_ref': 'factory:monochrome'},
+    'flashback_v1': {'lut_ref': 'factory:flashback_classic_v1', 'base_exposure_offset_v2': 0.0},
 }
+
+CAMERA_OPTICAL_PROFILES = {
+    'funsaver': {'enable_chromatic_aberration': True, 'ca_pixels': 3.5,
+        'softness_sigma': .35, 'enable_edge_softness': True,
+        'edge_softness_strength_pct': 45.0, 'edge_softness_sigma': 2.2,
+        'edge_softness_start_pct': 45.0, 'sharpen_strength_pct': 65.0,
+        'sharpen_radius': .7, 'vignette_strength_pct': 14.0, 'vignette_curve': 35.0,
+        'bloom_strength_pct': 5.0, 'halation_strength_pct': 2.0,
+        'halation_threshold_stops': 5.0, 'halation_blur_radius': 4.0},
+    'quicksnap': {'enable_chromatic_aberration': True, 'ca_pixels': 2.5,
+        'softness_sigma': .30, 'enable_edge_softness': True,
+        'edge_softness_strength_pct': 35.0, 'edge_softness_sigma': 1.8,
+        'edge_softness_start_pct': 50.0, 'sharpen_strength_pct': 70.0,
+        'sharpen_radius': .7, 'vignette_strength_pct': 10.0, 'vignette_curve': 40.0,
+        'bloom_strength_pct': 4.0, 'halation_strength_pct': 2.0,
+        'halation_threshold_stops': 5.0, 'halation_blur_radius': 4.0},
+    'rapid_retro': {'enable_chromatic_aberration': True, 'ca_pixels': 4.0,
+        'softness_sigma': .50, 'enable_edge_softness': True,
+        'edge_softness_strength_pct': 60.0, 'edge_softness_sigma': 3.0,
+        'edge_softness_start_pct': 35.0, 'sharpen_strength_pct': 50.0,
+        'sharpen_radius': .8, 'vignette_strength_pct': 18.0, 'vignette_curve': 25.0,
+        'bloom_strength_pct': 5.0, 'halation_strength_pct': 2.0,
+        'halation_threshold_stops': 5.0, 'halation_blur_radius': 4.0},
+    'lomo_simple_use': {'enable_chromatic_aberration': True, 'ca_pixels': 3.5,
+        'softness_sigma': .40, 'enable_edge_softness': True,
+        'edge_softness_strength_pct': 50.0, 'edge_softness_sigma': 2.5,
+        'edge_softness_start_pct': 40.0, 'sharpen_strength_pct': 60.0,
+        'sharpen_radius': .7, 'vignette_strength_pct': 15.0, 'vignette_curve': 35.0,
+        'bloom_strength_pct': 5.0, 'halation_strength_pct': 2.0,
+        'halation_threshold_stops': 5.0, 'halation_blur_radius': 4.0},
+    'h35': {'enable_chromatic_aberration': True, 'ca_pixels': 4.0,
+        'softness_sigma': .30, 'enable_edge_softness': True,
+        'edge_softness_strength_pct': 60.0, 'edge_softness_sigma': 2.8,
+        'edge_softness_start_pct': 35.0, 'sharpen_strength_pct': 50.0,
+        'sharpen_radius': .7, 'vignette_strength_pct': 12.0, 'vignette_curve': 30.0,
+        'grain_scale': 1.3},
+    'camp_snap_2': {'enable_halation': False, 'enable_chromatic_aberration': True,
+        'ca_pixels': 1.0, 'softness_sigma': .10, 'enable_edge_softness': True,
+        'edge_softness_strength_pct': 30.0, 'edge_softness_sigma': 1.5,
+        'edge_softness_start_pct': 50.0, 'sharpen_strength_pct': 140.0,
+        'sharpen_radius': .6, 'vignette_strength_pct': 8.0, 'vignette_curve': 30.0,
+        'bloom_strength_pct': 2.0},
+    'paper_shoot_20mp': {'enable_halation': False, 'enable_chromatic_aberration': True,
+        'ca_pixels': 1.0, 'softness_sigma': .25, 'enable_edge_softness': True,
+        'edge_softness_strength_pct': 45.0, 'edge_softness_sigma': 2.5,
+        'edge_softness_start_pct': 40.0, 'sharpen_strength_pct': 60.0,
+        'sharpen_radius': .8, 'vignette_strength_pct': 18.0, 'vignette_curve': 25.0,
+        'vignette_color_pct': 0.0, 'vignette_tint_r': 1.0,
+        'vignette_tint_g': .84, 'vignette_tint_b': .68, 'bloom_strength_pct': 2.0},
+    'doncamera_2': {'enable_halation': False, 'enable_chromatic_aberration': True,
+        'ca_pixels': 1.5, 'softness_sigma': .25, 'enable_edge_softness': True,
+        'edge_softness_strength_pct': 35.0, 'edge_softness_sigma': 2.0,
+        'edge_softness_start_pct': 45.0, 'sharpen_strength_pct': 85.0,
+        'sharpen_radius': .7, 'vignette_strength_pct': 10.0,
+        'vignette_curve': 30.0, 'bloom_strength_pct': 4.0},
+    'legacy_disposable': {'enable_chromatic_aberration': True, 'ca_pixels': 8.0,
+        'softness_sigma': .5, 'sharpen_strength_pct': 200.0, 'sharpen_radius': .5,
+        'vignette_strength_pct': 10.0, 'vignette_curve': 66.0, 'bloom_strength_pct': 15.0},
+    'legacy_point_shoot': {'enable_chromatic_aberration': True, 'ca_pixels': 2.0,
+        'softness_sigma': .3, 'sharpen_strength_pct': 50.0, 'sharpen_radius': 1.0,
+        'vignette_strength_pct': 10.0, 'bloom_strength_pct': 10.0},
+    'legacy_rangefinder': {'enable_chromatic_aberration': False, 'ca_pixels': 0.0,
+        'softness_sigma': .1, 'sharpen_strength_pct': 80.0, 'sharpen_radius': 1.0,
+        'vignette_strength_pct': 5.0, 'bloom_strength_pct': 5.0},
+    'legacy_monochrome': {'enable_chromatic_aberration': False, 'ca_pixels': 0.0,
+        'softness_sigma': .1, 'sharpen_strength_pct': 80.0, 'sharpen_radius': 1.0,
+        'vignette_strength_pct': 20.0, 'bloom_strength_pct': 5.0},
+    'flashback_v1': {'enable_chromatic_aberration': True, 'ca_pixels': 5.0,
+        'softness_sigma': .3, 'sharpen_strength_pct': 80.0, 'sharpen_radius': .5,
+        'vignette_strength_pct': 10.0, 'vignette_curve': 66.0, 'bloom_strength_pct': 3.0},
+}
+
+TEXTURE_PROFILES = {
+    'film_800': {'enable_grain': True, 'enable_digital_noise': False, 'grain_strength_pct': 110.0},
+    'film_400_fine': {'enable_grain': True, 'enable_digital_noise': False, 'grain_strength_pct': 85.0},
+    'film_400_visible': {'enable_grain': True, 'enable_digital_noise': False, 'grain_strength_pct': 100.0},
+    'film_200_half': {'enable_grain': True, 'enable_digital_noise': False, 'grain_strength_pct': 70.0},
+    'camp_snap_2': {'enable_grain': False, 'enable_digital_noise': True,
+        'luma_noise_strength_pct': 1.4, 'luma_noise_scale': 1.0,
+        'chroma_noise_strength_pct': .45, 'chroma_noise_scale': 2.0,
+        'chroma_noise_correlation': .3, 'shadow_noise_bias_pct': 65.0,
+        'enable_jpeg_artifacts': True, 'jpeg_artifact_strength_pct': 8.0,
+        'jpeg_chroma_degradation_pct': 10.0, 'jpeg_ringing_strength_pct': 8.0},
+    'paper_shoot': {'enable_grain': False, 'enable_digital_noise': True,
+        'luma_noise_strength_pct': 1.1, 'luma_noise_scale': 1.2,
+        'chroma_noise_strength_pct': .5, 'chroma_noise_scale': 2.2,
+        'chroma_noise_correlation': .35, 'shadow_noise_bias_pct': 70.0,
+        'enable_jpeg_artifacts': True, 'jpeg_artifact_strength_pct': 12.0,
+        'jpeg_chroma_degradation_pct': 18.0, 'jpeg_ringing_strength_pct': 5.0},
+    'doncamera_2': {'enable_grain': False, 'enable_digital_noise': True,
+        'luma_noise_strength_pct': 2.0, 'luma_noise_scale': 1.4,
+        'chroma_noise_strength_pct': 1.2, 'chroma_noise_scale': 2.8,
+        'chroma_noise_correlation': .4, 'shadow_noise_bias_pct': 80.0,
+        'enable_jpeg_artifacts': True, 'jpeg_artifact_strength_pct': 25.0,
+        'jpeg_chroma_degradation_pct': 35.0, 'jpeg_ringing_strength_pct': 18.0},
+    'legacy_disposable': {'grain_strength_pct': 120.0},
+    'legacy_point_shoot': {'grain_strength_pct': 80.0},
+    'legacy_rangefinder': {'grain_strength_pct': 50.0},
+    'legacy_monochrome': {'grain_strength_pct': 150.0},
+    'flashback_v1': {'grain_strength_pct': 200.0},
+}
+
+PRESET_RECIPES = {
+    'disposable': ('legacy_disposable', 'legacy_disposable', 'legacy_disposable'),
+    'funsaver_800': ('funsaver_800', 'funsaver', 'film_800'),
+    'quicksnap_400': ('quicksnap_400', 'quicksnap', 'film_400_fine'),
+    'rapid_retro_400': ('rapid_retro_400', 'rapid_retro', 'film_400_visible'),
+    'lomo_cn400': ('lomo_cn400', 'lomo_simple_use', 'film_400_fine'),
+    'h35_gold_200': ('h35_gold_200', 'h35', 'film_200_half'),
+    **{f'cs2_{mode}': (f'cs2_{mode}', 'camp_snap_2', 'camp_snap_2')
+       for mode in ('standard', 'vintage_1', 'vintage_2', 'vintage_3', 'analog', 'bw')},
+    **{f'paper_{mode}': (f'paper_{mode}', 'paper_shoot_20mp', 'paper_shoot')
+       for mode in ('original', 'bw', 'blue', 'sepia')},
+    **{f'don_{mode}': (f'don_{mode}', 'doncamera_2', 'doncamera_2')
+       for mode in ('retro', 'cool', 'warm', 'vivid', 'bw')},
+    'point_shoot': ('legacy_point_shoot', 'legacy_point_shoot', 'legacy_point_shoot'),
+    'rangefinder': ('legacy_rangefinder', 'legacy_rangefinder', 'legacy_rangefinder'),
+    'monochrome': ('legacy_monochrome', 'legacy_monochrome', 'legacy_monochrome'),
+    'flashback_classic_v1': ('flashback_v1', 'flashback_v1', 'flashback_v1'),
+}
+
+
+def _compose_recipe(profile_ids):
+    color_id, optical_id, texture_id = profile_ids
+    merged = {}
+    for layer, profile_id in ((COLOR_PROFILES, color_id),
+                              (CAMERA_OPTICAL_PROFILES, optical_id),
+                              (TEXTURE_PROFILES, texture_id)):
+        merged.update(layer[profile_id])
+    return merged
+
+
+VIBE_PRESETS = {preset_id: _compose_recipe(ids)
+                for preset_id, ids in PRESET_RECIPES.items()}
 
 # Short, file-name-safe suffix per vibe — appended to exported JPGs as
 # {basename}_{suffix}.jpg so users can tell at a glance which look produced
@@ -562,6 +744,9 @@ VIBE_EXPORT_SUFFIX = {
     'rangefinder':          'rf',
     'monochrome':           'mono',
     'flashback_classic_v1': 'v1',
+    **{preset_id: preset_id.replace('_', '-') for preset_id in PRESET_RECIPES
+       if preset_id not in {'disposable', 'point_shoot', 'rangefinder',
+                            'monochrome', 'flashback_classic_v1'}},
 }
 
 
@@ -573,20 +758,10 @@ def vibe_config_for(vibe_id: str) -> VibeConfig:
     we map those onto the dataclass field names. All numeric preset
     values are in user-facing units (px, percent, signed curve).
     """
-    cfg = VibeConfig()  # all factory defaults
-    preset = VIBE_PRESETS[vibe_id]
-    cfg.enable_chromatic_aberration = preset['enable_ca']
-    cfg.ca_pixels                   = preset['ca_pixels']
-    cfg.softness_sigma              = preset['softness']
-    cfg.sharpen_strength_pct        = preset['sharpness_pct']
-    cfg.sharpen_radius              = preset['sharpen_radius']
-    cfg.grain_strength_pct          = preset['grain_pct']
-    cfg.vignette_strength_pct       = preset['vignette_pct']
-    cfg.vignette_curve              = preset.get('vignette_curve', VIGNETTE_CURVE)
-    cfg.bloom_strength_pct          = preset['bloom_pct']
-    cfg.lut_ref                     = preset['lut']
-    cfg.base_exposure_offset_v2     = preset.get('base_exposure_offset_v2', BASE_EXPOSURE_OFFSET_V2)
-    cfg.ca_zoom_blur_pct            = preset.get('ca_zoom_blur_pct', CA_ZOOM_BLUR_PCT)
+    cfg = VibeConfig()
+    for field_name, value in VIBE_PRESETS[vibe_id].items():
+        if hasattr(cfg, field_name):
+            setattr(cfg, field_name, value)
     return cfg
 
 

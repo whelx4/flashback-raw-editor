@@ -1,0 +1,146 @@
+name: Build unsigned iPhone + iPad IPA
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/ios-unsigned-ipa.yml
+      - ios/**
+      - shared/**
+      - assets/luts/**
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-unsigned-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-unsigned-ipa:
+    name: Build AltStore IPA
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+        with:
+          lfs: true
+
+      - name: Install XcodeGen
+        run: |
+          set -euo pipefail
+          brew install xcodegen
+          xcodebuild -version
+          xcodegen version
+
+      - name: Generate Xcode project
+        working-directory: ios/LoFiLogicIOS
+        run: |
+          set -euo pipefail
+          xcodegen generate
+          test -f LoFiLogic.xcodeproj/project.pbxproj
+
+      - name: Build unsigned universal iOS app
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          xcodebuild \
+            -project ios/LoFiLogicIOS/LoFiLogic.xcodeproj \
+            -scheme LoFiLogic \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build/ios-derived \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY='' \
+            DEVELOPMENT_TEAM='' \
+            build 2>&1 | tee build/ios-build.log
+
+      - name: Verify bundle and package IPA
+        run: |
+          set -euo pipefail
+
+          shopt -s nullglob
+          APP_CANDIDATES=(build/ios-derived/Build/Products/Release-iphoneos/*.app)
+          APP_PATH="${APP_CANDIDATES[0]:-}"
+          if [ -z "$APP_PATH" ] || [ ! -d "$APP_PATH" ]; then
+            echo "No iPhone/iPad .app bundle was produced." >&2
+            exit 1
+          fi
+
+          EXECUTABLE_NAME="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' \
+            "$APP_PATH/Info.plist")"
+          BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' \
+            "$APP_PATH/Info.plist")"
+          SHORT_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' \
+            "$APP_PATH/Info.plist")"
+          BUILD_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' \
+            "$APP_PATH/Info.plist")"
+          test -n "$EXECUTABLE_NAME" || { echo "Bundle executable name is empty." >&2; exit 1; }
+          test -x "$APP_PATH/$EXECUTABLE_NAME" || { echo "Bundle executable is missing." >&2; exit 1; }
+          test "$BUNDLE_ID" = 'com.lofilogic.ios' || {
+            echo "Unexpected bundle ID: $BUNDLE_ID" >&2
+            exit 1
+          }
+          test -n "$SHORT_VERSION" || { echo "Marketing version is missing." >&2; exit 1; }
+          test -n "$BUILD_VERSION" || { echo "Build version is missing." >&2; exit 1; }
+          test -f "$APP_PATH/presets.json" || {
+            echo "Preset catalog is missing from the app bundle." >&2
+            find "$APP_PATH" -type f -print
+            exit 1
+          }
+
+          IOS_LUT_COUNT="$(find "$APP_PATH" -type f -name 'ios_*.cube' | wc -l | tr -d ' ')"
+          PRESET_COUNT="$(python3 -c 'import json; print(len(json.load(open("shared/presets.json"))["presets"]))')"
+          if [ "$IOS_LUT_COUNT" -lt "$PRESET_COUNT" ]; then
+            echo "Expected $PRESET_COUNT iOS LUTs, found $IOS_LUT_COUNT." >&2
+            exit 1
+          fi
+
+          rm -rf dist/ios
+          mkdir -p 'dist/ios/Payload'
+          ditto "$APP_PATH" 'dist/ios/Payload/LoFi Logic.app'
+          rm -rf 'dist/ios/Payload/LoFi Logic.app/_CodeSignature'
+
+          (
+            cd dist/ios
+            /usr/bin/zip -qry '../LoFiLogic-iOS-unsigned.ipa' Payload
+          )
+
+          test -s dist/LoFiLogic-iOS-unsigned.ipa
+          /usr/bin/unzip -t dist/LoFiLogic-iOS-unsigned.ipa
+          shasum -a 256 dist/LoFiLogic-iOS-unsigned.ipa \
+            > dist/LoFiLogic-iOS-unsigned.ipa.sha256
+
+          {
+            echo "### Unsigned iPhone + iPad build ready"
+            echo ""
+            echo "Download the **LoFiLogic-iOS-unsigned** artifact below."
+            echo "Unzip it, then install the contained IPA with AltStore Classic."
+            echo ""
+            echo "Bundle ID: \`$BUNDLE_ID\`"
+            echo "Version: \`$SHORT_VERSION ($BUILD_VERSION)\`"
+            echo "iOS LUTs bundled: \`$IOS_LUT_COUNT\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v7
+        with:
+          name: LoFiLogic-iOS-unsigned
+          path: |
+            dist/LoFiLogic-iOS-unsigned.ipa
+            dist/LoFiLogic-iOS-unsigned.ipa.sha256
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload Xcode build log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: LoFiLogic-iOS-build-log
+          path: build/ios-build.log
+          if-no-files-found: ignore
+          retention-days: 14

@@ -12,6 +12,26 @@ from core.config import (
 )
 
 
+def test_researched_presets_compose_reusable_profiles():
+    from core.config import PRESET_RECIPES
+    fun = vibe_config_for('funsaver_800')
+    paper = vibe_config_for('paper_original')
+    camp = vibe_config_for('cs2_standard')
+    assert PRESET_RECIPES['funsaver_800'] == ('funsaver_800', 'funsaver', 'film_800')
+    assert fun.ca_pixels == 3.5 and fun.grain_strength_pct == 110.0
+    assert paper.vignette_tint_r > paper.vignette_tint_g > paper.vignette_tint_b
+    assert camp.enable_digital_noise and not camp.enable_grain
+
+
+def test_every_factory_lut_resolves():
+    from core.config import resolve_lut_ref
+    for vibe_id in VIBE_PRESETS:
+        cfg = vibe_config_for(vibe_id)
+        path, origin = resolve_lut_ref(cfg.lut_ref)
+        assert origin == 'factory', vibe_id
+        assert path is not None, vibe_id
+
+
 def test_ca_scale_is_orientation_invariant():
     """CA strength must not change when the frame is rotated (W<->H swap), so a
     portrait/rotated image fringes like its landscape counterpart. And for a
@@ -115,7 +135,7 @@ def test_default_vibeconfig_is_factory():
 
 def test_image_adjustments_roundtrip():
     a = ImageAdjustments(exposure_ev=1.5, wb_temp=200.0, tint=-3.0,
-                         push_pull_ev=0.5, rotation=90,
+                         push_pull_ev=0.5, filter_intensity=0.65, rotation=90,
                          active_vibe_id='disposable')
     assert ImageAdjustments.from_dict(a.to_dict()) == a
 
@@ -126,6 +146,7 @@ def test_image_adjustments_default_has_all_fields():
     assert a.wb_temp == 0.0
     assert a.tint == 0.0
     assert a.push_pull_ev == 0.0
+    assert a.filter_intensity == 0.60
     assert a.rotation == 0
     assert a.active_vibe_id == ''
 
