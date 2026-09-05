@@ -31,11 +31,22 @@ final class ImageProcessor: @unchecked Sendable {
         let amount = min(max(intensity, 0), 1)
         let mask = CIImage(color: CIColor(red: 1, green: 1, blue: 1, alpha: amount))
             .cropped(to: neutral.extent)
+        let neutralToLinear = CIFilter.sRGBToneCurveToLinear()
+        neutralToLinear.inputImage = neutral
+        let styledToLinear = CIFilter.sRGBToneCurveToLinear()
+        styledToLinear.inputImage = styled
+        guard let neutralLinear = neutralToLinear.outputImage,
+              let styledLinear = styledToLinear.outputImage else {
+            throw RenderError.cannotRender
+        }
         let blend = CIFilter.blendWithAlphaMask()
-        blend.inputImage = styled
-        blend.backgroundImage = neutral
+        blend.inputImage = styledLinear
+        blend.backgroundImage = neutralLinear
         blend.maskImage = mask
-        guard let output = blend.outputImage else { throw RenderError.cannotRender }
+        guard let mixedLinear = blend.outputImage else { throw RenderError.cannotRender }
+        let toSRGB = CIFilter.linearToSRGBToneCurve()
+        toSRGB.inputImage = mixedLinear
+        guard let output = toSRGB.outputImage else { throw RenderError.cannotRender }
 
         let scale = min(1, maxDimension / max(output.extent.width, output.extent.height))
         let preview = output.transformed(by: CGAffineTransform(scaleX: scale, y: scale))

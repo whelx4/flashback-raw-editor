@@ -8,7 +8,7 @@ struct RollFrame: Identifiable, Codable, Hashable {
     var sourceCamera: String?
     var developedFilename: String?
 
-    init(filename: String, presetID: String = "funsaver_800", intensity: Double = 0.6,
+    init(filename: String, presetID: String = "funsaver_800", intensity: Double = 1.0,
          sourceCamera: String? = nil, developedFilename: String? = nil) {
         self.id = UUID()
         self.filename = filename

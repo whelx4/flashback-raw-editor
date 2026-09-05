@@ -80,7 +80,7 @@ private struct CameraImportView: View {
                     .frame(minWidth: 210)
             }
             .buttonStyle(.bordered)
-            Text("P43 JPEGs start at 60% filter intensity so the camera's own colour and flash character remain visible.")
+            Text("Presets are calibrated for Sony P43 JPEGs. 100% is the intended look; lower the intensity only when you want a subtler variation.")
                 .font(.footnote).foregroundStyle(.tertiary).multilineTextAlignment(.center)
                 .frame(maxWidth: 480)
             Spacer()

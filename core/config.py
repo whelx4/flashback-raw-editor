@@ -403,6 +403,12 @@ class VibeConfig:
 
     # ---- pipeline tuning ----
     base_exposure_offset_v2: float = BASE_EXPOSURE_OFFSET_V2
+    # Finished P43 JPEGs are display-referred, but the creative LUTs were
+    # authored against the same +2 EV ACEScct input anchor as the original RAW
+    # pipeline.  Keep that LUT-input calibration separate from the neutral
+    # render so 0% remains the untouched JPEG and 100% reaches the authored
+    # preset instead of feeding the LUT data two stops too dark.
+    raster_lut_input_offset_ev: float = BASE_EXPOSURE_OFFSET_V2
 
     # ---- LUT + DNG metadata ----
     # Tagged LUT reference. One of:
@@ -461,10 +467,9 @@ class ImageAdjustments:
     wb_temp: float = 0.0
     tint: float = 0.0
     push_pull_ev: float = 0.0
-    # P43 JPEGs already carry the camera's contrast, sharpening and white
-    # balance. A 60% starting point adds the selected character without
-    # overpowering that baked-in rendering; the UI still exposes 0–100%.
-    filter_intensity: float = 0.60
+    # Presets are calibrated for P43 input, so full strength is the intended
+    # result. The slider remains a creative fade from the untouched JPEG.
+    filter_intensity: float = 1.0
     rotation: int = 0
     active_vibe_id: str = ''   # filled in by the editor when an image loads
 
@@ -573,26 +578,29 @@ def resolve_lut_ref(ref: str):
 # overrides. Keeping these layers separate is what lets an H35 optical profile
 # enlarge the selected film grain without pretending the camera is a film stock.
 COLOR_PROFILES = {
-    'funsaver_800': {'lut_ref': 'factory:funsaver_800'},
-    'quicksnap_400': {'lut_ref': 'factory:quicksnap_400'},
-    'rapid_retro_400': {'lut_ref': 'factory:rapid_retro_400'},
-    'lomo_cn400': {'lut_ref': 'factory:lomo_cn400'},
-    'h35_gold_200': {'lut_ref': 'factory:h35_gold_200'},
-    'cs2_standard': {'lut_ref': 'factory:cs2_standard'},
-    'cs2_vintage_1': {'lut_ref': 'factory:cs2_vintage_1'},
-    'cs2_vintage_2': {'lut_ref': 'factory:cs2_vintage_2'},
-    'cs2_vintage_3': {'lut_ref': 'factory:cs2_vintage_3'},
-    'cs2_analog': {'lut_ref': 'factory:cs2_analog'},
-    'cs2_bw': {'lut_ref': 'factory:cs2_bw'},
-    'paper_original': {'lut_ref': 'factory:paper_original'},
-    'paper_bw': {'lut_ref': 'factory:paper_bw'},
-    'paper_blue': {'lut_ref': 'factory:paper_blue'},
-    'paper_sepia': {'lut_ref': 'factory:paper_sepia'},
-    'don_retro': {'lut_ref': 'factory:don_retro'},
-    'don_cool': {'lut_ref': 'factory:don_cool'},
-    'don_warm': {'lut_ref': 'factory:don_warm'},
-    'don_vivid': {'lut_ref': 'factory:don_vivid'},
-    'don_bw': {'lut_ref': 'factory:don_bw'},
+    # Per-look P43 LUT anchors were solved against the reference roll. They
+    # preserve source exposure (with small intentional family-specific deltas)
+    # instead of using one global opacity or one global input exposure.
+    'funsaver_800': {'lut_ref': 'factory:funsaver_800', 'raster_lut_input_offset_ev': 1.63},
+    'quicksnap_400': {'lut_ref': 'factory:quicksnap_400', 'raster_lut_input_offset_ev': 1.68},
+    'rapid_retro_400': {'lut_ref': 'factory:rapid_retro_400', 'raster_lut_input_offset_ev': 1.64},
+    'lomo_cn400': {'lut_ref': 'factory:lomo_cn400', 'raster_lut_input_offset_ev': 1.67},
+    'h35_gold_200': {'lut_ref': 'factory:h35_gold_200', 'raster_lut_input_offset_ev': 1.66},
+    'cs2_standard': {'lut_ref': 'factory:cs2_standard', 'raster_lut_input_offset_ev': 1.47},
+    'cs2_vintage_1': {'lut_ref': 'factory:cs2_vintage_1', 'raster_lut_input_offset_ev': 1.50},
+    'cs2_vintage_2': {'lut_ref': 'factory:cs2_vintage_2', 'raster_lut_input_offset_ev': 1.49},
+    'cs2_vintage_3': {'lut_ref': 'factory:cs2_vintage_3', 'raster_lut_input_offset_ev': 1.34},
+    'cs2_analog': {'lut_ref': 'factory:cs2_analog', 'raster_lut_input_offset_ev': 1.15},
+    'cs2_bw': {'lut_ref': 'factory:cs2_bw', 'raster_lut_input_offset_ev': 1.87},
+    'paper_original': {'lut_ref': 'factory:paper_original', 'raster_lut_input_offset_ev': 1.39},
+    'paper_bw': {'lut_ref': 'factory:paper_bw', 'raster_lut_input_offset_ev': 1.85},
+    'paper_blue': {'lut_ref': 'factory:paper_blue', 'raster_lut_input_offset_ev': 1.43},
+    'paper_sepia': {'lut_ref': 'factory:paper_sepia', 'raster_lut_input_offset_ev': 1.36},
+    'don_retro': {'lut_ref': 'factory:don_retro', 'raster_lut_input_offset_ev': 1.41},
+    'don_cool': {'lut_ref': 'factory:don_cool', 'raster_lut_input_offset_ev': 1.45},
+    'don_warm': {'lut_ref': 'factory:don_warm', 'raster_lut_input_offset_ev': 1.44},
+    'don_vivid': {'lut_ref': 'factory:don_vivid', 'raster_lut_input_offset_ev': 1.48},
+    'don_bw': {'lut_ref': 'factory:don_bw', 'raster_lut_input_offset_ev': 1.89},
     # Backward-compatible profiles retained for existing projects.
     'legacy_disposable': {'lut_ref': 'factory:disposable'},
     'legacy_point_shoot': {'lut_ref': 'factory:point_shoot'},
@@ -602,59 +610,62 @@ COLOR_PROFILES = {
 }
 
 CAMERA_OPTICAL_PROFILES = {
-    'funsaver': {'enable_chromatic_aberration': True, 'ca_pixels': 3.5,
-        'softness_sigma': .35, 'enable_edge_softness': True,
-        'edge_softness_strength_pct': 45.0, 'edge_softness_sigma': 2.2,
-        'edge_softness_start_pct': 45.0, 'sharpen_strength_pct': 65.0,
-        'sharpen_radius': .7, 'vignette_strength_pct': 14.0, 'vignette_curve': 35.0,
-        'bloom_strength_pct': 5.0, 'halation_strength_pct': 2.0,
+    # P43-native residual optics. The source JPEG already contains lens CA,
+    # edge acuity and Sony sharpening, so these describe only what is still
+    # needed to reach each target camera rather than recreating the whole lens.
+    'funsaver': {'enable_chromatic_aberration': True, 'ca_pixels': 2.2,
+        'softness_sigma': .25, 'enable_edge_softness': True,
+        'edge_softness_strength_pct': 30.0, 'edge_softness_sigma': 1.8,
+        'edge_softness_start_pct': 50.0, 'sharpen_strength_pct': 18.0,
+        'sharpen_radius': .7, 'vignette_strength_pct': 10.0, 'vignette_curve': 35.0,
+        'bloom_strength_pct': 3.0, 'halation_strength_pct': 1.5,
         'halation_threshold_stops': 5.0, 'halation_blur_radius': 4.0},
-    'quicksnap': {'enable_chromatic_aberration': True, 'ca_pixels': 2.5,
+    'quicksnap': {'enable_chromatic_aberration': True, 'ca_pixels': 1.5,
+        'softness_sigma': .20, 'enable_edge_softness': True,
+        'edge_softness_strength_pct': 25.0, 'edge_softness_sigma': 1.5,
+        'edge_softness_start_pct': 55.0, 'sharpen_strength_pct': 15.0,
+        'sharpen_radius': .7, 'vignette_strength_pct': 8.0, 'vignette_curve': 40.0,
+        'bloom_strength_pct': 2.0, 'halation_strength_pct': 1.0,
+        'halation_threshold_stops': 5.0, 'halation_blur_radius': 4.0},
+    'rapid_retro': {'enable_chromatic_aberration': True, 'ca_pixels': 2.5,
+        'softness_sigma': .35, 'enable_edge_softness': True,
+        'edge_softness_strength_pct': 40.0, 'edge_softness_sigma': 2.0,
+        'edge_softness_start_pct': 45.0, 'sharpen_strength_pct': 10.0,
+        'sharpen_radius': .8, 'vignette_strength_pct': 12.0, 'vignette_curve': 25.0,
+        'bloom_strength_pct': 3.0, 'halation_strength_pct': 1.5,
+        'halation_threshold_stops': 5.0, 'halation_blur_radius': 4.0},
+    'lomo_simple_use': {'enable_chromatic_aberration': True, 'ca_pixels': 2.2,
         'softness_sigma': .30, 'enable_edge_softness': True,
         'edge_softness_strength_pct': 35.0, 'edge_softness_sigma': 1.8,
-        'edge_softness_start_pct': 50.0, 'sharpen_strength_pct': 70.0,
-        'sharpen_radius': .7, 'vignette_strength_pct': 10.0, 'vignette_curve': 40.0,
-        'bloom_strength_pct': 4.0, 'halation_strength_pct': 2.0,
+        'edge_softness_start_pct': 45.0, 'sharpen_strength_pct': 12.0,
+        'sharpen_radius': .7, 'vignette_strength_pct': 10.0, 'vignette_curve': 35.0,
+        'bloom_strength_pct': 3.0, 'halation_strength_pct': 1.5,
         'halation_threshold_stops': 5.0, 'halation_blur_radius': 4.0},
-    'rapid_retro': {'enable_chromatic_aberration': True, 'ca_pixels': 4.0,
-        'softness_sigma': .50, 'enable_edge_softness': True,
-        'edge_softness_strength_pct': 60.0, 'edge_softness_sigma': 3.0,
-        'edge_softness_start_pct': 35.0, 'sharpen_strength_pct': 50.0,
-        'sharpen_radius': .8, 'vignette_strength_pct': 18.0, 'vignette_curve': 25.0,
-        'bloom_strength_pct': 5.0, 'halation_strength_pct': 2.0,
-        'halation_threshold_stops': 5.0, 'halation_blur_radius': 4.0},
-    'lomo_simple_use': {'enable_chromatic_aberration': True, 'ca_pixels': 3.5,
-        'softness_sigma': .40, 'enable_edge_softness': True,
-        'edge_softness_strength_pct': 50.0, 'edge_softness_sigma': 2.5,
-        'edge_softness_start_pct': 40.0, 'sharpen_strength_pct': 60.0,
-        'sharpen_radius': .7, 'vignette_strength_pct': 15.0, 'vignette_curve': 35.0,
-        'bloom_strength_pct': 5.0, 'halation_strength_pct': 2.0,
-        'halation_threshold_stops': 5.0, 'halation_blur_radius': 4.0},
-    'h35': {'enable_chromatic_aberration': True, 'ca_pixels': 4.0,
-        'softness_sigma': .30, 'enable_edge_softness': True,
-        'edge_softness_strength_pct': 60.0, 'edge_softness_sigma': 2.8,
-        'edge_softness_start_pct': 35.0, 'sharpen_strength_pct': 50.0,
-        'sharpen_radius': .7, 'vignette_strength_pct': 12.0, 'vignette_curve': 30.0,
+    'h35': {'enable_chromatic_aberration': True, 'ca_pixels': 2.5,
+        'softness_sigma': .25, 'enable_edge_softness': True,
+        'edge_softness_strength_pct': 45.0, 'edge_softness_sigma': 2.2,
+        'edge_softness_start_pct': 40.0, 'sharpen_strength_pct': 10.0,
+        'sharpen_radius': .7, 'vignette_strength_pct': 10.0, 'vignette_curve': 30.0,
         'grain_scale': 1.3},
     'camp_snap_2': {'enable_halation': False, 'enable_chromatic_aberration': True,
-        'ca_pixels': 1.0, 'softness_sigma': .10, 'enable_edge_softness': True,
-        'edge_softness_strength_pct': 30.0, 'edge_softness_sigma': 1.5,
-        'edge_softness_start_pct': 50.0, 'sharpen_strength_pct': 140.0,
-        'sharpen_radius': .6, 'vignette_strength_pct': 8.0, 'vignette_curve': 30.0,
-        'bloom_strength_pct': 2.0},
+        'ca_pixels': .5, 'softness_sigma': .05, 'enable_edge_softness': True,
+        'edge_softness_strength_pct': 15.0, 'edge_softness_sigma': 1.2,
+        'edge_softness_start_pct': 55.0, 'sharpen_strength_pct': 20.0,
+        'sharpen_radius': .6, 'vignette_strength_pct': 5.0, 'vignette_curve': 30.0,
+        'bloom_strength_pct': 1.0},
     'paper_shoot_20mp': {'enable_halation': False, 'enable_chromatic_aberration': True,
-        'ca_pixels': 1.0, 'softness_sigma': .25, 'enable_edge_softness': True,
-        'edge_softness_strength_pct': 45.0, 'edge_softness_sigma': 2.5,
-        'edge_softness_start_pct': 40.0, 'sharpen_strength_pct': 60.0,
-        'sharpen_radius': .8, 'vignette_strength_pct': 18.0, 'vignette_curve': 25.0,
+        'ca_pixels': .5, 'softness_sigma': .15, 'enable_edge_softness': True,
+        'edge_softness_strength_pct': 30.0, 'edge_softness_sigma': 1.8,
+        'edge_softness_start_pct': 45.0, 'sharpen_strength_pct': 12.0,
+        'sharpen_radius': .8, 'vignette_strength_pct': 12.0, 'vignette_curve': 25.0,
         'vignette_color_pct': 0.0, 'vignette_tint_r': 1.0,
-        'vignette_tint_g': .84, 'vignette_tint_b': .68, 'bloom_strength_pct': 2.0},
+        'vignette_tint_g': .92, 'vignette_tint_b': .84, 'bloom_strength_pct': 1.0},
     'doncamera_2': {'enable_halation': False, 'enable_chromatic_aberration': True,
-        'ca_pixels': 1.5, 'softness_sigma': .25, 'enable_edge_softness': True,
-        'edge_softness_strength_pct': 35.0, 'edge_softness_sigma': 2.0,
-        'edge_softness_start_pct': 45.0, 'sharpen_strength_pct': 85.0,
-        'sharpen_radius': .7, 'vignette_strength_pct': 10.0,
-        'vignette_curve': 30.0, 'bloom_strength_pct': 4.0},
+        'ca_pixels': .75, 'softness_sigma': .15, 'enable_edge_softness': True,
+        'edge_softness_strength_pct': 20.0, 'edge_softness_sigma': 1.5,
+        'edge_softness_start_pct': 50.0, 'sharpen_strength_pct': 15.0,
+        'sharpen_radius': .7, 'vignette_strength_pct': 7.0,
+        'vignette_curve': 30.0, 'bloom_strength_pct': 2.0},
     'legacy_disposable': {'enable_chromatic_aberration': True, 'ca_pixels': 8.0,
         'softness_sigma': .5, 'sharpen_strength_pct': 200.0, 'sharpen_radius': .5,
         'vignette_strength_pct': 10.0, 'vignette_curve': 66.0, 'bloom_strength_pct': 15.0},
@@ -673,28 +684,28 @@ CAMERA_OPTICAL_PROFILES = {
 }
 
 TEXTURE_PROFILES = {
-    'film_800': {'enable_grain': True, 'enable_digital_noise': False, 'grain_strength_pct': 110.0},
-    'film_400_fine': {'enable_grain': True, 'enable_digital_noise': False, 'grain_strength_pct': 85.0},
-    'film_400_visible': {'enable_grain': True, 'enable_digital_noise': False, 'grain_strength_pct': 100.0},
-    'film_200_half': {'enable_grain': True, 'enable_digital_noise': False, 'grain_strength_pct': 70.0},
+    'film_800': {'enable_grain': True, 'enable_digital_noise': False, 'grain_strength_pct': 40.0},
+    'film_400_fine': {'enable_grain': True, 'enable_digital_noise': False, 'grain_strength_pct': 28.0},
+    'film_400_visible': {'enable_grain': True, 'enable_digital_noise': False, 'grain_strength_pct': 34.0},
+    'film_200_half': {'enable_grain': True, 'enable_digital_noise': False, 'grain_strength_pct': 24.0},
     'camp_snap_2': {'enable_grain': False, 'enable_digital_noise': True,
-        'luma_noise_strength_pct': 1.4, 'luma_noise_scale': 1.0,
-        'chroma_noise_strength_pct': .45, 'chroma_noise_scale': 2.0,
+        'luma_noise_strength_pct': .5, 'luma_noise_scale': 1.0,
+        'chroma_noise_strength_pct': .2, 'chroma_noise_scale': 2.0,
         'chroma_noise_correlation': .3, 'shadow_noise_bias_pct': 65.0,
-        'enable_jpeg_artifacts': True, 'jpeg_artifact_strength_pct': 8.0,
-        'jpeg_chroma_degradation_pct': 10.0, 'jpeg_ringing_strength_pct': 8.0},
+        'enable_jpeg_artifacts': True, 'jpeg_artifact_strength_pct': 4.0,
+        'jpeg_chroma_degradation_pct': 6.0, 'jpeg_ringing_strength_pct': 4.0},
     'paper_shoot': {'enable_grain': False, 'enable_digital_noise': True,
-        'luma_noise_strength_pct': 1.1, 'luma_noise_scale': 1.2,
-        'chroma_noise_strength_pct': .5, 'chroma_noise_scale': 2.2,
+        'luma_noise_strength_pct': .4, 'luma_noise_scale': 1.2,
+        'chroma_noise_strength_pct': .2, 'chroma_noise_scale': 2.2,
         'chroma_noise_correlation': .35, 'shadow_noise_bias_pct': 70.0,
-        'enable_jpeg_artifacts': True, 'jpeg_artifact_strength_pct': 12.0,
-        'jpeg_chroma_degradation_pct': 18.0, 'jpeg_ringing_strength_pct': 5.0},
+        'enable_jpeg_artifacts': True, 'jpeg_artifact_strength_pct': 6.0,
+        'jpeg_chroma_degradation_pct': 10.0, 'jpeg_ringing_strength_pct': 3.0},
     'doncamera_2': {'enable_grain': False, 'enable_digital_noise': True,
-        'luma_noise_strength_pct': 2.0, 'luma_noise_scale': 1.4,
-        'chroma_noise_strength_pct': 1.2, 'chroma_noise_scale': 2.8,
+        'luma_noise_strength_pct': .7, 'luma_noise_scale': 1.4,
+        'chroma_noise_strength_pct': .35, 'chroma_noise_scale': 2.8,
         'chroma_noise_correlation': .4, 'shadow_noise_bias_pct': 80.0,
-        'enable_jpeg_artifacts': True, 'jpeg_artifact_strength_pct': 25.0,
-        'jpeg_chroma_degradation_pct': 35.0, 'jpeg_ringing_strength_pct': 18.0},
+        'enable_jpeg_artifacts': True, 'jpeg_artifact_strength_pct': 10.0,
+        'jpeg_chroma_degradation_pct': 16.0, 'jpeg_ringing_strength_pct': 8.0},
     'legacy_disposable': {'grain_strength_pct': 120.0},
     'legacy_point_shoot': {'grain_strength_pct': 80.0},
     'legacy_rangefinder': {'grain_strength_pct': 50.0},

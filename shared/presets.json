@@ -2,7 +2,7 @@
   "schemaVersion": 2,
   "cameraModel": "Sony Cyber-shot DSC-P43",
   "workingColorSpace": "ACEScg",
-  "intensity": { "minimum": 0.0, "maximum": 1.0, "default": 0.6, "blendSpace": "linear-sRGB" },
+  "intensity": { "minimum": 0.0, "maximum": 1.0, "default": 1.0, "blendSpace": "linear-sRGB" },
   "presets": [
     { "id": "funsaver_800", "name": "FunSaver 800-inspired", "subtitle": "Warm ISO 800 disposable character", "category": "Disposable film", "status": "provisional", "exportSuffix": "fs800", "lut": "funsaver_800.cube", "colorProfile": "funsaver_800", "opticalProfile": "funsaver", "textureProfile": "film_800" },
     { "id": "quicksnap_400", "name": "QuickSnap 400-inspired", "subtitle": "Current global 32 mm / ISO 400 target", "category": "Disposable film", "status": "provisional", "exportSuffix": "qs400", "lut": "quicksnap_400.cube", "colorProfile": "quicksnap_400", "opticalProfile": "quicksnap", "textureProfile": "film_400_fine" },

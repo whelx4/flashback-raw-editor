@@ -1,6 +1,6 @@
 # Preset calibration status
 
-The camera-look catalog is built for Flashback ONE35 V2 input. Its presets are
+The camera-look catalog is built for finished Sony DSC-P43 JPEG input. Its presets are
 reproducible starting points, not claims that a proprietary manufacturer color
 pipeline has been reverse-engineered.
 
@@ -36,6 +36,13 @@ that compose linear-sRGB → ACEScg → ACEScct ahead of the creative LUT. This 
 required because Core Image and the Windows renderer do not present the LUT
 with the same input encoding; the iOS loader also explicitly converts `.cube`
 B-fastest ordering to Core Image's R-fastest memory layout.
+
+Each look has its own P43 LUT-input exposure anchor. Those anchors were solved
+across the reference P43 roll against explicit family-specific luminance targets;
+they are not a global intensity reduction. Windows applies the anchors before
+ACEScct encoding and the generator bakes the same values into the iOS LUTs.
+Optical sharpening, noise, grain, CA, softness and vignette are residual profiles:
+they account for the rendering already present in the P43 JPEG.
 
 ## Reference manifest
 

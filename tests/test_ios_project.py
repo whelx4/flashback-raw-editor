@@ -42,12 +42,25 @@ def test_ios_flow_has_import_edit_develop_gallery_and_share():
     content = (IOS / "Views" / "ContentView.swift").read_text(encoding="utf-8")
     editor = (IOS / "Views" / "FrameEditorView.swift").read_text(encoding="utf-8")
     store = (IOS / "Services" / "RollStore.swift").read_text(encoding="utf-8")
+    processor = (IOS / "Services" / "ImageProcessor.swift").read_text(encoding="utf-8")
     assert "fileImporter" in content and "PhotosPicker" in content
     assert "developedOnly: true" in content
     assert "FILTER INTENSITY" in editor and "Save to Photos" in editor
     assert "ShareLink" in editor and "beforePreview" in editor
     assert "saveDevelopedJPEG" in store and "saveToPhotoLibrary" in store
     assert 'appendingPathComponent("Developed"' in store
+    assert "sRGBToneCurveToLinear" in processor
+    assert "linearToSRGBToneCurve" in processor
+
+
+def test_ios_lut_anchors_match_windows_p43_calibration():
+    from core.config import PRESET_RECIPES, vibe_config_for
+    from tools.generate_provisional_presets import P43_INPUT_EVS
+
+    public_ids = set(P43_INPUT_EVS)
+    assert public_ids.issubset(PRESET_RECIPES)
+    for preset_id, exposure_ev in P43_INPUT_EVS.items():
+        assert vibe_config_for(preset_id).raster_lut_input_offset_ev == exposure_ev
 
 
 def test_unsigned_ipa_workflow_builds_and_verifies_device_bundle():
